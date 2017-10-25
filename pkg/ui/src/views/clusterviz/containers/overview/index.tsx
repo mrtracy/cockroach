@@ -1,11 +1,11 @@
-import _ from "lodash";
 import React from "react";
 import { connect } from "react-redux";
-import * as d3 from "d3";
 
 import { refreshNodes, refreshLiveness } from "src/redux/apiReducers";
 import { nodesSummarySelector, NodesSummary } from "src/redux/nodes";
 import { AdminUIState } from "src/redux/state";
+import { renderCanvas } from "./sim";
+import "./sim.css";
 
 interface ClusterVizProps {
     nodesSummary: NodesSummary;
@@ -14,7 +14,7 @@ interface ClusterVizProps {
 }
 
 export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
-    graphEl: SVGElement;
+    svgEl: SVGElement;
 
     componentWillMount() {
         // Refresh nodes status query when mounting.
@@ -48,13 +48,13 @@ export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
         // NOTE: This might not work on Android:
         // http://caniuse.com/#feat=pagevisibility
         if (!document.hidden) {
-
+            renderCanvas(this.svgEl);
         }
     }
 
     render() {
         return (
-            <svg style={{width: "100%", height: "100%"}} className="cluster-viz" ref={svg => this.graphEl = svg}>
+            <svg style={{width: "100%", height: "100%"}} className="cluster-viz" ref={svg => this.svgEl = svg}>
                 <g className="cluster-canvas__main"/>
             </svg>
         );

@@ -1,0 +1,1 @@
+export function renderCanvas(svg: SVGElement): void;

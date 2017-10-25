@@ -1,0 +1,480 @@
+@import
+url('https://fonts.googleapis.com/css?family=Lato:400,700');
+
+html {
+    height: 100%;
+}
+
+body {
+    height: 100%;
+    font-family: 'Lato', sans-serif;
+}
+
+.controlscreen {
+    position: absolute;
+    left: 0px;
+    top: 0px;
+    width: 100%;
+    height: 100%;
+    fill: #fff;
+    fill-opacity: 0.85;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.heading {
+    font-size: 48px;
+    font-weight: bold
+}
+
+.stats {
+    font-size: 14px;
+    font-weight: bold
+}
+
+.model-container {
+    display: inline-block;
+    position: relative;
+    width: 100%;
+    vertical-align: top;
+    overflow: hidden;
+    background-color: lavender;
+    border: 0.5px solid #999;
+}
+
+.model-content-responsive {
+    display: inline-block;
+    position: absolute;
+    top: 0px;
+    left: 0;
+}
+
+.projection {
+    width: 100%;
+    height: 100%;
+    fill: lavender;
+}
+
+.btn-addnode {
+}
+
+.btn-addapp {
+}
+
+.btn-restart {
+    float: right;
+}
+
+.range {
+    stroke: #f00;
+    stroke-width: 0px;
+}
+
+.roachnode {
+    stroke: #333;
+    stroke-width: 1px;
+}
+
+.backoff {
+    stroke: #f00;
+    stroke-dasharray: 3,3;
+}
+
+.locality {
+    stroke: #66a;
+    stroke-width: 1.5px;
+    fill: #fff;
+    fill-opacity: 0.6;
+}
+
+.locality-label {
+    fill: white;
+    stroke-width: 0px;
+    font-size: 10px;
+    font-weight: bold;
+    alignment-baseline: middle;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.locality-label-background {
+    fill: #595f6c;
+    stroke-width: 0px;
+}
+
+.latency-centric .locality-label-background {
+    opacity: 0.75;
+    pointer-events: none;
+}
+
+.current-locality {
+    fill: black;
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.status-ring {
+    fill: none;
+    stroke-width: 2px;
+}
+
+.status-ring.available {
+    opacity: 0;
+    visibility: hidden;
+    stroke: #82cc00;
+}
+
+.status-ring.mixed {
+    opacity: 0.5;
+    visibility: visible;
+    stroke: #d9cc4f;
+}
+
+.status-ring.unavailable {
+    opacity: 0.5;
+    visibility: visible;
+    stroke: #d95d4f;
+}
+
+.capacity-background {
+    fill: #daeefa;
+    stroke: #51bbfd;
+    stroke-width: 0.25px;
+}
+
+.latency-centric .capacity-background {
+    opacity: 0.75;
+}
+
+.capacity-used {
+    fill: #51bbfd;
+    stroke: #daeefa;
+    stroke-width: 0.25px;
+}
+
+.capacity-used.detail {
+    fill: #daeefa;
+    stroke: #51bbfd;
+    stroke-width: 0.5px;
+}
+
+.capacity-used.detail.highlight {
+    fill: #51bbfd;
+    stroke: #daeefa;
+}
+
+.arc-label .guide {
+    stroke: #000;
+    stroke-width: 0.5px;
+}
+
+.arc-label text {
+    fill: #152849;
+    stroke-width: 0px;
+    font-size: 8px;
+    font-weight: bold;
+    text-anchor: middle;
+}
+
+.capacity-label {
+    fill: #5abbfd;
+    stroke-width: 0px;
+    font-size: 8px;
+    font-weight: bold;
+    text-anchor: start;
+}
+
+.capacity-used-label {
+    fill: #51bbfd;
+    stroke-width: 0px;
+    font-size: 8px;
+    font-weight: bold;
+}
+
+.capacity-centric .capacity-used-pct-label {
+    fill: #51bbfd;
+    stroke-width: 0px;
+    font-size: 24px;
+    font-weight: medium;
+    alignment-baseline: middle;
+    text-anchor: middle;
+}
+
+.latency-centric .capacity-background {
+    opacity: 0.75;
+    stroke: #152849;
+    stroke-width: 1px;
+    pointer-events: none;
+}
+
+.latency-centric .capacity-used-pct-label {
+    fill: #152849;
+    stroke-width: 0px;
+    font-size: 12px;
+    font-weight: bold;
+    alignment-baseline: central;
+    text-anchor: middle;
+    pointer-events: none;
+}
+
+.capacity-used-text {
+    fill: #595f6c;
+    stroke-width: 0px;
+    font-size: 7px;
+    font-weight: bold;
+    alignmnent-baseline: middle;
+    text-anchor: middle;
+}
+
+.client-activity {
+    stroke: #d95d4f;
+    stroke-linecap: round;
+    stroke-width: 4px;
+}
+
+.client-activity-label {
+    fill: #d95d4f;
+    stroke-width: 0px;
+    font-size: 8px;
+    font-weight: bold;
+    dominant-baseline: central;
+}
+
+.network-activity {
+    stroke: #152849;
+    stroke-linecap: round;
+    stroke-width: 4px;
+}
+
+.network-activity-label {
+    fill: #152849;
+    stroke-width: 0px;
+    font-size: 8px;
+    font-weight: bold;
+    dominant-baseline: central;
+}
+
+.locality-link {
+    stroke: #ccc;
+    stroke-width: 1.5px;
+    fill-opacity: 0;
+}
+
+.incoming-throughput-label {
+    fill: #8833cc;
+    stroke-width: 0px;
+    font-size: 8px;
+    text-anchor: end;
+}
+
+.outgoing-throughput-label {
+    fill: #82cc00;
+    stroke-width: 0px;
+    font-size: 8px;
+    text-anchor: end;
+    alignment-baseline: hanging;
+}
+
+.rtt-label {
+    fill: #152849;
+    stroke-width: 0px;
+    font-size: 8px;
+    text-anchor: start;
+    alignment-baseline: middle;
+}
+
+.expand-label {
+    fill: #595f6c;
+    stroke-width: 0px;
+    font-size: 10px;
+    font-weight: bold;
+    text-anchor: middle;
+}
+
+.node-unreachable {
+    fill: #f00;
+    fill-opacity: 0.1;
+}
+
+.node-full {
+    fill: #f00;
+    fill-opacity: 0.2;
+}
+
+.request {
+}
+
+.link {
+    stroke: #ccc;
+    stroke-width: 0px;
+}
+
+.route {
+    stroke: #ccc;
+    stroke-width: 0px;
+}
+
+.geopath {
+    fill: #f7f7ff;
+    stroke: #ccc;
+    stroke-width: .5px;
+}
+
+.box {
+    display: flex;
+    flex-flow: column;
+    height: 100%;
+}
+
+.box .model {
+    flex: 0 1 auto;
+}
+
+.box .details {
+    position: relative;
+    flex: 1 1 auto;
+    overflow: scroll;
+    font-size: 12pt;
+    min-height: 240px;
+}
+
+.box .details h2 {
+    color: #152849;
+    font-size: 16pt;
+    font-weight: bold;
+    text-align: center;
+    border-bottom: 2px solid #152849;
+}
+
+.box .details table {
+    width: 100%;
+    border-spacing: 0px;
+}
+
+.box .details tbody tr:hover {
+    color: #5abbfd;
+}
+
+.box .details th {
+    font-size: 10pt;
+    font-weight: bold;
+    text-decoration: underline;
+}
+
+.box .details .left {
+    text-align: left;
+}
+
+.box .details .right {
+    text-align: right;
+}
+
+.box .details .status {
+    text-align: right;
+    text-decoration: underline;
+}
+
+.box .details .available {
+    color: #82cc00;
+}
+
+.box .details .mixed {
+    color: #d9cc4f;
+}
+
+.box .details .unavailable {
+    color: #d95d4f;
+}
+
+.box .details td {
+    font-size: 10pt;
+    font-weight: normal;
+    vertical-align: top;
+    padding: 3px 0px 3px 0px;
+}
+
+.localities {
+    position: absolute;
+    left: 2%;
+    width: 37%;
+}
+
+.databases {
+    position: absolute;
+    left: 41%;
+    width: 56%;
+}
+
+.city {
+}
+
+.city .population {
+    opacity: 0.5;
+    cursor: pointer;
+}
+
+.city .population:hover {
+    stroke-width: 0.5px;
+    stroke: black;
+}
+
+.city:hover text {
+    visibility: visible;
+}
+
+.city text {
+    visibility: hidden;
+    font-size: 10px;
+    color: #595f6c;
+    alignment-baseline: hanging;
+}
+
+.button {
+    display: inline-block;
+    border-radius: 4px;
+    background-color: #daeefa;
+    border: 0.5px solid #51bbfd;
+    text-align: center;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 10px;
+    width: 250px;
+    transition: all 0.5s;
+    cursor: pointer;
+    margin: 5px;
+}
+
+.button span {
+    cursor: pointer;
+    display: inline-block;
+    position: relative;
+    transition: 0.5s;
+}
+
+.button span:after {
+    content: '\00bb';
+    position: absolute;
+    opacity: 0;
+    top: 0;
+    right: -20px;
+    transition: 0.5s;
+}
+
+.button:hover span {
+    padding-right: 25px;
+}
+
+.button:hover span:after {
+    opacity: 1;
+    right: 0;
+}
+
+.latency-legend {
+    stroke: #000;
+    stroke-width: 0.5px;
+    fill: none;
+}
+
+.latency-legend text {
+    font-size: 8px;
+}
