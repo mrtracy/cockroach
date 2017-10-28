@@ -54,9 +54,7 @@ export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
 
     render() {
         return (
-            <svg style={{width: "100%", height: "100%"}} className="cluster-viz" ref={svg => this.svgEl = svg}>
-                <g className="cluster-canvas__main"/>
-            </svg>
+            <svg style={{width: "100%", height: "100%"}} className="cluster-viz" ref={svg => this.svgEl = svg}/>
         );
     }
 }

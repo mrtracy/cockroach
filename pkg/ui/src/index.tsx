@@ -5,7 +5,6 @@ import "codemirror/theme/neat.css";
 import "nvd3/build/nv.d3.min.css";
 import "react-select/dist/react-select.css";
 import "styl/app.styl";
-import "src/js/sim/style.css";
 
 import "src/polyfills";
 

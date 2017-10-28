@@ -22,7 +22,7 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
     stroke-width: 0px;
 }
 
-.roachnode {
+.node {
     stroke: #333;
     stroke-width: 1px;
 }
@@ -52,11 +52,6 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .locality-label-background {
     fill: #595f6c;
     stroke-width: 0px;
-}
-
-.latency-centric .locality-label-background {
-    opacity: 0.75;
-    pointer-events: none;
 }
 
 .current-locality {
@@ -92,10 +87,6 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
     fill: #daeefa;
     stroke: #51bbfd;
     stroke-width: 0.25px;
-}
-
-.latency-centric .capacity-background {
-    opacity: 0.75;
 }
 
 .capacity-used {
@@ -143,30 +134,13 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
     font-weight: bold;
 }
 
-.capacity-centric .capacity-used-pct-label {
+.capacity-used-pct-label {
     fill: #51bbfd;
     stroke-width: 0px;
     font-size: 24px;
     font-weight: medium;
     alignment-baseline: middle;
     text-anchor: middle;
-}
-
-.latency-centric .capacity-background {
-    opacity: 0.75;
-    stroke: #152849;
-    stroke-width: 1px;
-    pointer-events: none;
-}
-
-.latency-centric .capacity-used-pct-label {
-    fill: #152849;
-    stroke-width: 0px;
-    font-size: 12px;
-    font-weight: bold;
-    alignment-baseline: central;
-    text-anchor: middle;
-    pointer-events: none;
 }
 
 .capacity-used-text {
