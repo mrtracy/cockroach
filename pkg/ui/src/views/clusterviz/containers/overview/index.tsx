@@ -4,7 +4,7 @@ import { connect } from "react-redux";
 import { refreshNodes, refreshLiveness } from "src/redux/apiReducers";
 import { nodesSummarySelector, NodesSummary } from "src/redux/nodes";
 import { AdminUIState } from "src/redux/state";
-import { renderCanvas } from "./sim";
+import { initNodeCanvas, updateNodeCanvas } from "./sim";
 import "./sim.css";
 
 interface ClusterVizProps {
@@ -15,6 +15,7 @@ interface ClusterVizProps {
 
 export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
     svgEl: SVGElement;
+    model: any;
 
     componentWillMount() {
         // Refresh nodes status query when mounting.
@@ -30,14 +31,15 @@ export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
     }
 
     componentDidMount() {
-        this.drawChart();
+        this.model = initNodeCanvas(this.svgEl);
+        this.drawNodeCanvas();
     }
 
     componentDidUpdate() {
-        this.drawChart();
+        this.drawNodeCanvas();
     }
 
-    drawChart = () => {
+    drawNodeCanvas = () => {
         // If the document is not visible (e.g. if the window is minimized) we don't
         // attempt to redraw the chart. Redrawing the chart uses
         // requestAnimationFrame, which isn't called when the tab is in the
@@ -48,13 +50,13 @@ export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
         // NOTE: This might not work on Android:
         // http://caniuse.com/#feat=pagevisibility
         if (!document.hidden) {
-            renderCanvas(this.svgEl);
+            updateNodeCanvas(this.model);
         }
     }
 
     render() {
         return (
-            <svg style={{width: "100%", height: "100%"}} className="cluster-viz" ref={svg => this.svgEl = svg}/>
+            <svg className="cluster-viz" ref={svg => this.svgEl = svg}/>
         );
     }
 }

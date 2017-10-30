@@ -29,18 +29,8 @@ function Facility(city, location, locality, racks, nodesPerRack, model) {
   }
 }
 
-export function renderCanvas(svg) {
-  var model = new Model("Global", 1250, 700);
-  model.projection = d3.geo.mercator();
-
-  window.onpopstate = function(event) {
-    if (event.state == null) {
-      zoomToLocality(model, 750, []);
-      return;
-    }
-    var locality = event.state.locality;
-    zoomToLocality(model, 750, locality);
-  }
+export function initNodeCanvas(svg) {
+  var model = new Model("Global", svg, d3.select(svg));
 
   // Facilities.
   new Facility("New York City", [-74.00597, 40.71427], ["region=United States", "city=New York City"], 1, 6, model);
@@ -61,7 +51,23 @@ export function renderCanvas(svg) {
   new Facility("Bangalore", [77.59369, 12.97194], ["region=India", "city=Bangalore"], 1, 7, model);
   new Facility("New Delhi", [77.22445, 28.63576], ["region=India", "city=New Delhi"], 1, 7, model);
 
-  addModel(model, d3.select(svg));
+  layoutProjection(model);
+
+  window.onpopstate = function(event) {
+    if (event.state == null) {
+      zoomToLocality(model, 750, []);
+      return;
+    }
+    var locality = event.state.locality;
+    zoomToLocality(model, 750, locality);
+  }
+  window.addEventListener("resize", function() { zoomToLocality(model, 0, model.currentLocality); });
+
+  return model;
+}
+
+export function updateNodeCanvas(model) {
+  model.projectionG.call(model.zoom.event);
 }
 
 /* localities.js */
@@ -536,12 +542,10 @@ LocalityLink.prototype.networkActivity = function() {
 
 /* model.js */
 
-// This file defines a simple model for describing a CockroachDB cluster.
-
-function Model(id, width, height) {
+function Model(id, svgParent, svg) {
   this.id = id;
-  this.width = width;
-  this.height = height;
+  this.svgParent = svgParent;
+  this.svg = svg;
 
   this.nodeRadius = 36;
   this.nodeCapacity = 50.0;
@@ -549,7 +553,7 @@ function Model(id, width, height) {
   this.nodes = [];
 
   this.currentLocality = [];
-  this.localities = [];
+  this.localities = null;
   this.localityCount = 0;
   this.localityLinks = [];
   this.localityLinkCount = 0;
@@ -557,8 +561,16 @@ function Model(id, width, height) {
   this.maxClientActivity = 1;
   this.maxNetworkActivity = 1;
 
-  this.projection = function(p) { return p };
+  this.projection = d3.geo.mercator();
   this.skin = new Localities();
+}
+
+Model.prototype.width = function() {
+  return this.svgParent.clientWidth;
+}
+
+Model.prototype.height = function() {
+  return this.svgParent.clientHeight;
 }
 
 // bounds returns longitude / latitude pairs representing the minimum
@@ -587,6 +599,11 @@ Model.prototype.bounds = function() {
 }
 
 Model.prototype.setLocality = function(locality) {
+  if (this.localities != null &&
+      this.currentLocality.length == locality.length &&
+      this.currentLocality.every(function(v,i) { return v === locality[i]})) {
+    return;
+  }
   this.currentLocality = locality;
   this.resetLocalities();
 }
@@ -604,24 +621,6 @@ Model.prototype.addLocality = function(locality) {
 
 Model.prototype.addNode = function(node) {
   this.nodes.push(node);
-}
-
-Model.prototype.start = function() {
-  // Setup periodic display refresh.
-  this.setRefreshTimeout()
-}
-
-Model.prototype.setRefreshTimeout = function() {
-  clearTimeout(this.timeout);
-  var that = this;
-  this.timeout = setTimeout(function() {
-    refreshModel(that);
-    that.setRefreshTimeout();
-  }, 2500);
-}
-
-Model.prototype.stop = function() {
-  clearTimeout(this.timeout);
 }
 
 Model.prototype.resetLocalities = function() {
@@ -872,26 +871,94 @@ Node.prototype.networkActivity = function(filter) {
 
 /* visualization.js */
 
-// This file defines the visual elements corresponding to the CockroachDB
-// distributed system and their animations.
+function layoutProjection(model) {
+  var pathGen = d3.geo.path().projection(model.projection);
 
-function addModel(model, svg) {
-  model.svgParent = svg;
+  // Compute the scale intent (min to max zoom).
+  var minScale = model.width() / 2 / Math.PI,
+      maxScale = maxScaleFactor * minScale,
+      scaleExtent = [minScale, maxScale * 1024];
 
-  if (model.projection) {
-    layoutProjection(model);
-  }
+  model.maxScale = maxScale;
+  model.zoom = d3.behavior.zoom()
+    .scaleExtent(scaleExtent)
+    .on("zoom", function() {
+      // Instead of translating the projection, rotate it (compute yaw as longitudinal rotation).
+      var t = model.zoom.translate(),
+          s = model.zoom.scale(),
+          yaw = 360 * (t[0] - model.width() / 2) / model.width() * (minScale / s);
+      // Compute limits for vertical translation based on max latitude.
+      model.projection.scale(s).translate([0, 0]);
+      var p = model.projection([0, maxLatitude]);
+      if (t[1] > -p[1]) {
+        t[1] = -p[1];
+      } else if (t[1] - p[1] < model.height()) {
+        t[1] = model.height() + p[1];
+      }
+      t[0] = model.width() / 2;
+      model.projection
+        .rotate([yaw, 0])
+        .translate(t)
+        .scale(s);
 
-  model.svg = model.svgParent.append("g");
+      model.worldG.selectAll("path").attr("d", pathGen);
+
+      // Draw US states if they intersect our viewable area.
+      var usB = [model.projection(usStatesBounds[0]), model.projection(usStatesBounds[1])];
+      var usScale = (usB[1][1] - usB[0][1]) / model.width();
+      if (usB[0][0] < model.width() && usB[1][0] > 0 && usB[0][1] < model.height() && usB[1][1] > 0 && usScale >= 0.2) {
+        // Set opacity based on zoom scale.
+        model.usStatesG.selectAll("path").attr("d", pathGen);
+        var opacity = (usScale - 0.2) / (0.33333 - 0.2)
+        model.usStatesG.style("opacity",  opacity);
+        // Set opacity for the considerably less detailed world map's version of the US.
+        model.projectionG.select("#world-840").style("opacity", opacity < 1 ? 1 : 0);
+      } else {
+        model.usStatesG.style("opacity", 0);
+        model.projectionG.select("#world-840").style("opacity", 1);
+      }
+
+      // Fade out geographic projection when approaching max scale.
+      model.projectionG.style("opacity", 1 - 0.5 * Math.min(1, (s / maxScale)));
+
+      model.redraw();
+    });
+
+  // Enable this to pan and zoom manually.
+  model.svg.call(model.zoom);
+
+  model.projectionG = model.svg.append("g");
+
+  model.worldG = model.projectionG.append("g");
+  d3.json("https://spencerkimball.github.io/simulation/world.json", function(error, collection) {
+    if (error) throw error;
+    model.worldG.selectAll("path")
+      .data(collection.features)
+      .enter().append("path")
+      .attr("class", "geopath")
+      .attr("id", function(d) { return "world-" + d.id; });
+    model.projectionG.call(model.zoom.event);
+  });
+
+  model.usStatesG = model.projectionG.append("g");
+  d3.json("https://spencerkimball.github.io/simulation/us-states.json", function(error, collection) {
+    if (error) throw error;
+    model.usStatesG.selectAll("path")
+      .data(collection.features)
+      .enter().append("path")
+      .attr("class", "geopath");
+    model.projectionG.call(model.zoom.event);
+  });
 
   // Current locality label.
-  model.svgParent.append("text")
+  model.svg.append("text")
     .attr("class", "current-locality")
     .attr("dx", function(d) { return "22"; })
     .attr("dy", function(d) { return "1em"; })
     .text(fullLocalityName(model.currentLocality, model));
 
-  model.layout();
+  model.projection.scale(model.maxScale);
+  zoomToLocality(model, 0, [], false);
 }
 
 var usStatesBounds = [[-124.626080, 48.987386], [-62.361014, 18.005611]],
@@ -915,7 +982,7 @@ function zoomToLocality(model, duration, locality, updateHistory) {
   model.setLocality(locality);
 
   // Add label.
-  var localityLabel = model.svgParent.select(".current-locality");
+  var localityLabel = model.svg.select(".current-locality");
   localityLabel
     .transition()
     .duration(duration / 2)
@@ -929,8 +996,8 @@ function zoomToLocality(model, duration, locality, updateHistory) {
     });
 
   var bounds = model.bounds(),
-      scalex = findScale(bounds[0][0], bounds[1][0], model.width / (Math.PI / 180)),
-      scaley = findScale(bounds[0][1], bounds[1][1], model.height / (Math.PI / 90)),
+      scalex = findScale(bounds[0][0], bounds[1][0], model.width() / (Math.PI / 180)),
+      scaley = findScale(bounds[0][1], bounds[1][1], model.height() / (Math.PI / 90)),
       scale = scalex == 0 ? scaley : (scaley == 0 ? scalex : Math.min(scalex, scaley)),
       needAdjust = false;
 
@@ -949,16 +1016,16 @@ function zoomToLocality(model, duration, locality, updateHistory) {
   // display purposes.
   if (needAdjust) {
     for (var i = 0; i < model.localities.length; i++) {
-      model.localities[i].adjustLocation(i, model.localities.length, 0.15 * model.width)
+      model.localities[i].adjustLocation(i, model.localities.length, 0.15 * model.width())
     }
     bounds = model.bounds();
   }
 
-  model.svgParent
+  model.svg
     .transition()
     .duration(duration)
     .call(model.zoom
-          .translate([model.width / 2 - p[0], model.height / 2 - p[1]])
+          .translate([model.width() / 2 - p[0], model.height() / 2 - p[1]])
           .scale(scale)
           .event);
 
@@ -967,95 +1034,7 @@ function zoomToLocality(model, duration, locality, updateHistory) {
   }
 }
 
-function layoutProjection(model) {
-  var pathGen = d3.geo.path().projection(model.projection);
-
-  // Compute the scale intent (min to max zoom).
-  var minScale = model.width / 2 / Math.PI,
-      maxScale = maxScaleFactor * minScale,
-      scaleExtent = [minScale, maxScale * 1024];
-
-  model.maxScale = maxScale;
-  model.zoom = d3.behavior.zoom()
-    .scaleExtent(scaleExtent)
-    .on("zoom", function() {
-      // Instead of translating the projection, rotate it (compute yaw as longitudinal rotation).
-      var t = model.zoom.translate(),
-          s = model.zoom.scale(),
-          yaw = 360 * (t[0] - model.width / 2) / model.width * (minScale / s);
-      // Compute limits for vertical translation based on max latitude.
-      model.projection.scale(s).translate([0, 0]);
-      var p = model.projection([0, maxLatitude]);
-      if (t[1] > -p[1]) {
-        t[1] = -p[1];
-      } else if (t[1] - p[1] < model.height) {
-        t[1] = model.height + p[1];
-      }
-      t[0] = model.width / 2;
-      model.projection
-        .rotate([yaw, 0])
-        .translate(t)
-        .scale(s);
-
-      model.worldG.selectAll("path").attr("d", pathGen);
-
-      // Draw US states if they intersect our viewable area.
-      var usB = [model.projection(usStatesBounds[0]), model.projection(usStatesBounds[1])];
-      var usScale = (usB[1][1] - usB[0][1]) / model.width;
-      if (usB[0][0] < model.width && usB[1][0] > 0 && usB[0][1] < model.height && usB[1][1] > 0 && usScale >= 0.2) {
-        // Set opacity based on zoom scale.
-        model.usStatesG.selectAll("path").attr("d", pathGen);
-        var opacity = (usScale - 0.2) / (0.33333 - 0.2)
-        model.usStatesG.style("opacity",  opacity);
-        // Set opacity for the considerably less detailed world map's version of the US.
-        model.projectionG.select("#world-840").style("opacity", opacity < 1 ? 1 : 0);
-      } else {
-        model.usStatesG.style("opacity", 0);
-        model.projectionG.select("#world-840").style("opacity", 1);
-      }
-
-      // Fade out geographic projection when approaching max scale.
-      model.projectionG.style("opacity", 1 - 0.5 * Math.min(1, (s / maxScale)));
-
-      model.redraw();
-    });
-
-  // Enable this to pan and zoom manually.
-  model.svgParent.call(model.zoom);
-
-  model.projectionG = model.svgParent.append("g");
-  model.projectionG
-    .append("rect")
-    .attr("class", "projection");
-
-  model.worldG = model.projectionG.append("g");
-  d3.json("https://spencerkimball.github.io/simulation/world.json", function(error, collection) {
-    if (error) throw error;
-    model.worldG.selectAll("path")
-      .data(collection.features)
-      .enter().append("path")
-      .attr("class", "geopath")
-      .attr("id", function(d) { return "world-" + d.id; });
-    model.projectionG.call(model.zoom.event);
-  });
-
-  model.usStatesG = model.projectionG.append("g");
-  d3.json("https://spencerkimball.github.io/simulation/us-states.json", function(error, collection) {
-    if (error) throw error;
-    model.usStatesG.selectAll("path")
-      .data(collection.features)
-      .enter().append("path")
-      .attr("class", "geopath");
-    model.projectionG.call(model.zoom.event);
-  });
-
-  model.projection.scale(model.maxScale);
-  zoomToLocality(model, 0, [], false);
-}
-
 function layoutModel(model) {
-  if (model.svg == null) return;
-
   model.localitySel = model.svg.selectAll(".locality")
       .data(model.localities, function(d) { return d.id; });
   model.skin
@@ -1116,7 +1095,6 @@ function layoutModel(model) {
 }
 
 function refreshModel(model) {
-  if (model.svg == null) return;
   model.skin.update(model);
   model.projectionG.call(model.zoom.event);
 }
