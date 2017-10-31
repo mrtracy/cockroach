@@ -750,7 +750,7 @@ Model.prototype.computeLocalityLinkPaths = function() {
   for (var i = 0; i < this.localityLinks.length; i++) {
     var link = this.localityLinks[i];
     // Make sure the link goes from left to right.
-    if (link.l1.pos > link.l2.pos) {
+    if (link.l1.pos[0] > link.l2.pos[0]) {
       var l1Tmp = link.l1;
       link.l1 = link.l2;
       link.l2 = l1Tmp;
@@ -892,7 +892,8 @@ function layoutProjection(model) {
       var p = model.projection([0, maxLatitude]);
       if (t[1] > -p[1]) {
         t[1] = -p[1];
-      } else if (t[1] - p[1] < model.height()) {
+      }
+      if (t[1] - p[1] < model.height()) {
         t[1] = model.height() + p[1];
       }
       t[0] = model.width() / 2;

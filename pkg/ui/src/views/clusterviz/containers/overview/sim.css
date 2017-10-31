@@ -4,7 +4,7 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .cluster-viz {
     width: 100%;
     height: 100%;
-    background-color: lavender;
+    background-color: #ececf9;
 }
 
 .node {
