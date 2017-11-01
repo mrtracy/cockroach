@@ -759,11 +759,14 @@ Model.prototype.computeLocalityLinkPaths = function() {
         len = length(vec),
         norm = normalize(vec),
         skip = maxR;
+
+    // Create the first points in the curve between the two localties.
     link.points = [link.l1.pos, add(link.l1.pos, mult(norm, skip))];
 
     // Bend the curve around any localities which come too close to
     // the line drawn to represent this locality link. This inner
     // loop just adds additional points to the cardinal curve.
+    var additionalPoints = [];
     for (var j = 0; j < this.localities.length; j++) {
       // First, find the closest point on the locality link segment to
       // the center of each locality.
@@ -801,7 +804,10 @@ Model.prototype.computeLocalityLinkPaths = function() {
       }
     }
 
-    // Add remaining points to the curve.
+    // Ensure that points sort from left to right.
+    link.points.sort(function(a, b) { return a[0] - b[0]; });
+
+    // Finish up the curve by adding the final points.
     link.points.push(sub(link.l2.pos, mult(norm, skip)));
     link.points.push(link.l2.pos);
   }
