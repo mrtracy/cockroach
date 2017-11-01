@@ -7,11 +7,6 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
     background-color: #ececf9;
 }
 
-.node {
-    stroke: #333;
-    stroke-width: 1px;
-}
-
 .locality {
     stroke: #66a;
     stroke-width: 1.5px;

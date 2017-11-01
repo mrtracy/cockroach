@@ -50,7 +50,7 @@ export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
         // NOTE: This might not work on Android:
         // http://caniuse.com/#feat=pagevisibility
         if (!document.hidden) {
-            updateNodeCanvas(this.model);
+            updateNodeCanvas(this.model, this.props.nodesSummary);
         }
     }
 

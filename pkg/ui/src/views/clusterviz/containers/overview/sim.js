@@ -1,55 +1,172 @@
 import * as d3 from "d3";
-import { line, curveCardinalOpen } from "d3-shape";
 import "d3-path";
+import { line, curveCardinalOpen } from "d3-shape";
+
+import { LivenessStatus } from "src/redux/nodes";
+import { MetricConstants } from "src/util/proto";
 
 d3.line = line;
 d3.curveCardinalOpen = curveCardinalOpen;
 
+function Node(name, locality) {
+  this.desc = {
+    node_id: name,
+    address: {
+      network_field: name,
+      address_field: name,
+    },
+    locality: {
+      tiers: locality,
+    },
+  };
+  this.metrics = {
+    [MetricConstants.usedCapacity]: 0,
+    [MetricConstants.availableCapacity]: 50,
+    "sql.select.count": 0,
+    "sql.distsql.select.count": 0,
+    "sql.update.count": 0,
+    "sql.insert.count": 0,
+    "sql.delete.count": 0,
+  };
+  this.latencies = {
+    // In nanoseconds
+  };
+}
+
+function nodeID(node) {
+  return node.desc.node_id;
+}
+
+function nodeState(model, node) {
+  if (model.livnesses == null) {
+    return LivenessStatus.HEALTHY;
+  }
+  return model.livenesses[nodeID(node)];
+}
+
+function nodeName(node) {
+  return node.desc.address.address_field;
+}
+
+function nodeLocality(node) {
+  var locality = [];
+  for (var i = 0; i < node.desc.locality.tiers.length; i++) {
+    var tier = node.desc.locality.tiers[i];
+    locality.push(tier.key + "=" + tier.value);
+  }
+  locality.push("node=" + nodeName(node));
+  return locality;
+}
+
+// Temporary hard-coded locations.
+var locations = {
+  "city=New York City": [-74.00597, 40.71427],
+  "city=Miami": [-80.19366, 25.77427],
+  "city=Des Moines": [-93.60911, 41.60054],
+  "city=Los Angeles": [-118.24368, 34.05223],
+  "city=Seattle": [-122.33207, 47.60621],
+  "city=London": [-0.12574, 51.50853],
+  "city=Berlin": [13.41053, 52.52437],
+  "city=Stockholm": [18.0649, 59.33258],
+  "city=Sydney": [151.20732, -33.86785],
+  "city=Melbourne": [144.96332, -37.814],
+  "city=Brisbane": [153.02809, -27.46794],
+  "city=Beijing": [116.39723, 39.9075],
+  "city=Shanghai": [121.45806, 31.22222],
+  "city=Shenzhen": [114.0683, 22.54554],
+  "city=Mumbai": [72.88261, 19.07283],
+  "city=Bangalore": [77.59369, 12.97194],
+  "city=New Delhi": [77.22445, 28.63576],
+};
+
+function nodeLocation(node) {
+  var locality = nodeLocality(node);
+  for (var i = 0; i < locality.length; i++) {
+    if (locality[i] in locations) {
+      return locations[locality[i]];
+    }
+  }
+  return [0, 0];
+}
+
+function nodeAdjustLocation(node, location) {
+  locations["node=" + nodeName(node)] = location;
+}
+
+function nodeUsage(node) {
+  return node.metrics[MetricConstants.usedCapacity];
+}
+
+function nodeCapacity(node) {
+  return node.metrics[MetricConstants.availableCapacity];
+}
+
+function nodeClientActivity(node) {
+  return node.metrics["sql.select.count"] +
+    node.metrics["sql.distsql.select.count"] +
+    node.metrics["sql.update.count"] +
+    node.metrics["sql.insert.count"] +
+    node.metrics["sql.delete.count"];
+}
+
+// networkActivity returns a tuple of values: [outgoing throughput,
+// incoming throughput, average latency]. Throughput values are in
+// bytes / s; latency is in milliseconds.
+function nodeNetworkActivity(node, filter) {
+  var activity = [0, 0, 0],
+      count = 0;
+  for (var key in node.latencies) {
+    if (filter == null || (key in filter)) {
+      activity[0] += 0; /* outgoing throughput */
+      activity[1] += 0; /* incoming throughput */
+      activity[2] += node.latencies[key];
+      count++;
+    }
+  }
+  activity[2] /= count;
+  return activity;
+}
+
+var useGlobalNodes = true,
+    globalNodes = [];
+
 // Facility creates a new facility location. The arguments are the city
 // name that the facility exists in, the locality in which it's organized,
 // the number of racks, and the number of nodes per rack.
-function Facility(city, location, locality, racks, nodesPerRack, model) {
-  this.city = city;
-  this.locality = locality;
-  this.location = location;
-  this.racks = racks;
-  this.nodesPerRack = nodesPerRack;
-  this.nodes = [];
-
+function Facility(locality, racks, nodesPerRack) {
   // Add racks and nodes for each facility.
   for (var k = 0; k < racks; k++) {
     for (var l = 0; l < nodesPerRack; l++) {
-      var nodeLocality = locality.slice(0);
+      var nodeLocality = _.clone(locality);
       if (this.racks > 1) {
-        nodeLocality.push("rack=rack " + k);
+        nodeLocality.push({key: "rack", value: k});
       }
-      this.nodes.push(
-        new Node("10.10." + (k + 1) + "." + (l + 1), this.location, nodeLocality, model));
+      globalNodes.push(new Node("10.10." + (k + 1) + "." + (l + 1), nodeLocality));
     }
   }
 }
 
+// Facilities.
+new Facility([{key: "region", value: "United States"}, {key: "city", value: "New York City"}], 1, 6);
+new Facility([{key: "region", value: "United States"}, {key: "city", value: "Miami"}], 1, 6);
+new Facility([{key: "region", value: "United States"}, {key: "city", value: "Des Moines"}], 1, 6);
+new Facility([{key: "region", value: "United States"}, {key: "city", value: "Los Angeles"}], 1, 6);
+new Facility([{key: "region", value: "United States"}, {key: "city", value: "Seattle"}], 1, 6);
+new Facility([{key: "region", value: "European Union"}, {key: "city", value: "London"}], 1, 5);
+new Facility([{key: "region", value: "European Union"}, {key: "city", value: "Berlin"}], 1, 5);
+new Facility([{key: "region", value: "European Union"}, {key: "city", value: "Stockholm"}], 1, 5);
+new Facility([{key: "region", value: "Australia"}, {key: "city", value: "Sydney"}], 1, 3);
+new Facility([{key: "region", value: "Australia"}, {key: "city", value: "Melbourne"}], 1, 3);
+new Facility([{key: "region", value: "Australia"}, {key: "city", value: "Brisbane"}], 1, 3);
+new Facility([{key: "region", value: "China"}, {key: "city", value: "Beijing"}], 1, 8);
+new Facility([{key: "region", value: "China"}, {key: "city", value: "Shanghai"}], 1, 8);
+new Facility([{key: "region", value: "China"}, {key: "city", value: "Shenzhen"}], 1, 8);
+new Facility([{key: "region", value: "India"}, {key: "city", value: "Mumbai"}], 1, 7);
+new Facility([{key: "region", value: "India"}, {key: "city", value: "Bangalore"}], 1, 7);
+new Facility([{key: "region", value: "India"}, {key: "city", value: "New Delhi"}], 1, 7);
+
 export function initNodeCanvas(svg) {
   var model = new Model("Global", svg, d3.select(svg));
-
-  // Facilities.
-  new Facility("New York City", [-74.00597, 40.71427], ["region=United States", "city=New York City"], 1, 6, model);
-  new Facility("Miami", [-80.19366, 25.77427], ["region=United States", "city=Miami"], 1, 6, model);
-  new Facility("Des Moines", [-93.60911, 41.60054], ["region=United States", "city=Des Moines"], 1, 6, model);
-  new Facility("Los Angeles", [-118.24368, 34.05223], ["region=United States", "city=Los Angeles"], 1, 6, model);
-  new Facility("Seattle", [-122.33207, 47.60621], ["region=United States", "city=Seattle"], 1, 6, model);
-  new Facility("London", [-0.12574, 51.50853], ["region=European Union", "city=London"], 1, 5, model);
-  new Facility("Berlin", [13.41053, 52.52437], ["region=European Union", "city=Berlin"], 1, 5, model);
-  new Facility("Stockholm", [18.0649, 59.33258], ["region=European Union", "city=Stockholm"], 1, 5, model);
-  new Facility("Sydney", [151.20732, -33.86785], ["region=Australia", "city=Sydney"], 1, 3, model);
-  new Facility("Melbourne", [144.96332, -37.814], ["region=Australia", "city=Melbourne"], 1, 3, model);
-  new Facility("Brisbane", [153.02809, -27.46794], ["region=Australia", "city=Brisbane"], 1, 3, model);
-  new Facility("Beijing", [116.39723, 39.9075], ["region=China", "city=Beijing"], 1, 8, model);
-  new Facility("Shanghai", [121.45806, 31.22222], ["region=China", "city=Shanghai"], 1, 8, model);
-  new Facility("Shenzhen", [114.0683, 22.54554], ["region=China", "city=Shenzhen"], 1, 8, model);
-  new Facility("Mumbai", [72.88261, 19.07283], ["region=India", "city=Mumbai"], 1, 7, model);
-  new Facility("Bangalore", [77.59369, 12.97194], ["region=India", "city=Bangalore"], 1, 7, model);
-  new Facility("New Delhi", [77.22445, 28.63576], ["region=India", "city=New Delhi"], 1, 7, model);
 
   layoutProjection(model);
 
@@ -66,8 +183,16 @@ export function initNodeCanvas(svg) {
   return model;
 }
 
-export function updateNodeCanvas(model) {
-  model.projectionG.call(model.zoom.event);
+export function updateNodeCanvas(model, nodesSummary) {
+  model.resetLocalities();
+  if (useGlobalNodes) {
+    model.nodes = globalNodes;
+  } else {
+    model.livenesses = nodesSummary.livenessStatusByNodeID;
+    model.nodes = nodesSummary.nodeStatuses;
+    console.log(nodesSummary);
+  }
+  zoomToLocality(model, 750, model.currentLocality);
 }
 
 /* localities.js */
@@ -136,12 +261,12 @@ function Localities() {
 }
 
 Localities.prototype.maxRadius = function(model) {
-  return model.nodeRadius * 1.6;
+  return model.localityRadius * 1.6;
 }
 
 Localities.prototype.locality = function(model, sel) {
-  var innerR = model.nodeRadius,
-      arcWidth = model.nodeRadius * 0.11111,
+  var innerR = model.localityRadius,
+      arcWidth = model.localityRadius * 0.11111,
       outerR = innerR + arcWidth,
       maxRadius = this.maxRadius(model);
 
@@ -275,8 +400,8 @@ Localities.prototype.localityLink = function(model, sel) {
 }
 
 Localities.prototype.update = function(model) {
-  var innerR = model.nodeRadius,
-      arcWidth = model.nodeRadius * 0.11111,
+  var innerR = model.localityRadius,
+      arcWidth = model.localityRadius * 0.11111,
       outerR = innerR + arcWidth,
       locSel = model.localitySel,
       linkSel = model.localityLinkSel;
@@ -362,8 +487,8 @@ function Locality(locality, nodes, model) {
 Locality.prototype.findCentroid = function() {
   var centroid = [0, 0];
   for (var i = 0; i < this.nodes.length; i++) {
-    centroid = [centroid[0] + this.nodes[i].location[0],
-                centroid[1] + this.nodes[i].location[1]];
+    centroid = [centroid[0] + nodeLocation(this.nodes[i])[0],
+                centroid[1] + nodeLocation(this.nodes[i])[1]];
   }
   return [centroid[0] / this.nodes.length, centroid[1] / this.nodes.length];
 }
@@ -380,7 +505,7 @@ Locality.prototype.adjustLocation = function(i, count, radius) {
       xyAdjusted = [xy[0] + radius * Math.cos(angle), xy[1] + radius * Math.sin(angle)];
   this.location = this.model.projection.invert(xyAdjusted);
   for (var i = 0; i < this.nodes.length; i++) {
-    this.nodes[i].location = this.location;
+    nodeAdjustLocation(this.nodes[i], this.location);
   }
 }
 
@@ -394,20 +519,10 @@ Locality.prototype.state = function() {
   return "available";
 }
 
-Locality.prototype.toggleState = function() {
-  var newState = "down";
-  if (this.liveCount() < this.nodes.length) {
-    newState = "healthy";
-  }
-  for (var i = 0; i < this.nodes.length; i++) {
-    this.nodes[i].state = newState;
-  }
-}
-
 Locality.prototype.liveCount = function() {
   var count = 0;
   for (var i = 0; i < this.nodes.length; i++) {
-    count += (this.nodes[i].state == "healthy") ? 1 : 0;
+    count += (nodeState(this.nodes[i]) == LivenessStatus.HEALTHY) ? 1 : 0;
   }
   return count;
 }
@@ -415,7 +530,7 @@ Locality.prototype.liveCount = function() {
 Locality.prototype.usage = function() {
   var usage = 0;
   for (var i = 0; i < this.nodes.length; i++) {
-    usage += this.nodes[i].usage();
+    usage += nodeUsage(this.nodes[i]);
   }
   return usage;
 }
@@ -423,7 +538,7 @@ Locality.prototype.usage = function() {
 Locality.prototype.capacity = function() {
   var capacity = 0;
   for (var i = 0; i < this.nodes.length; i++) {
-    capacity += this.nodes[i].capacity;
+    capacity += nodeCapacity(this.nodes[i]);
   }
   return capacity;
 }
@@ -431,7 +546,7 @@ Locality.prototype.capacity = function() {
 Locality.prototype.clientActivity = function() {
   var activity = 0;
   for (var i = 0; i < this.nodes.length; i++) {
-    activity += this.nodes[i].clientActivity();
+    activity += nodeClientActivity(this.nodes[i]);
   }
   if (activity > this.model.maxClientActivity) {
     this.model.maxClientActivity = activity;
@@ -442,7 +557,7 @@ Locality.prototype.clientActivity = function() {
 Locality.prototype.totalNetworkActivity = function() {
   var total = [0, 0];
   for (var i = 0; i < this.nodes.length; i++) {
-    var activity = this.nodes[i].networkActivity(null);
+    var activity = nodeNetworkActivity(this.nodes[i], null);
     total = [total[0] + activity[0], total[1] + activity[1]];
   }
   var activity = total[0] + total[1]
@@ -532,7 +647,7 @@ LocalityLink.prototype.networkActivity = function() {
   var total = [0, 0, 0],
       count = 0;
   for (var i = 0; i < this.l1.nodes.length; i++) {
-    var activity = this.l1.nodes[i].networkActivity(filter);
+    var activity = nodeNetworkActivity(this.l1.nodes[i], filter);
     total = [total[0] + activity[0], total[1] + activity[1], total[2] + activity[2]];
     count++;
   }
@@ -547,7 +662,7 @@ function Model(id, svgParent, svg) {
   this.svgParent = svgParent;
   this.svg = svg;
 
-  this.nodeRadius = 36;
+  this.localityRadius = 36;
   this.nodeCapacity = 50.0;
   this.unitSize = 64<<20;
   this.nodes = [];
@@ -619,10 +734,6 @@ Model.prototype.addLocality = function(locality) {
   this.localities.push(locality);
 }
 
-Model.prototype.addNode = function(node) {
-  this.nodes.push(node);
-}
-
 Model.prototype.resetLocalities = function() {
   // Determine localities to display based on current locality.
   var localityMap = {};
@@ -632,9 +743,10 @@ Model.prototype.resetLocalities = function() {
   this.maxClientActivity = 1;
   this.maxNetworkActivity = 1;
   for (var i = 0; i < this.nodes.length; i++) {
-    var node = this.nodes[i];
-    if (localityHasPrefix(node.locality, this.currentLocality)) {
-      var locality = node.locality.slice(0, this.currentLocality.length + 1);
+    var node = this.nodes[i],
+        nodeLoc = nodeLocality(node);
+    if (localityHasPrefix(nodeLoc, this.currentLocality)) {
+      var locality = nodeLoc.slice(0, this.currentLocality.length + 1);
       var key = localityKey(locality);
       if (!(key in localityMap)) {
         localityMap[key] = {
@@ -746,7 +858,7 @@ function findClosestPoint(s, e, p) {
 // in order to avoid intersection. The bending is straightforward and
 // will by no means avoid intersections entirely.
 Model.prototype.computeLocalityLinkPaths = function() {
-  var maxR = this.nodeRadius * 1.11111 * this.localityScale;
+  var maxR = this.localityRadius * 1.11111 * this.localityScale;
   for (var i = 0; i < this.localityLinks.length; i++) {
     var link = this.localityLinks[i];
     // Make sure the link goes from left to right.
@@ -818,63 +930,6 @@ Model.prototype.layout = function() {
   refreshModel(this);
 }
 
-/* node.js */
-
-
-function Node(name, location, locality, model) {
-  this.name = name;
-  // Add node name as last, most-specific locality entry.
-  locality.push("node=" + name);
-  this.location = location;
-  this.locality = locality;
-  this.capacity = model.nodeCapacity;
-  this.index = model.nodes.length;
-  this.id = "node" + this.index;
-  this.routes = [];
-  this.radius = model.nodeRadius;
-  this.clazz = "node";
-  this.state = "healthy";
-  this.model = model;
-
-  this.model.addNode(this);
-}
-
-Node.prototype.down = function() {
-  return this.state != "healthy";
-}
-
-Node.prototype.pctUsage = function(countLog) {
-  return (this.usage(countLog) * 100.0) / this.capacity;
-}
-
-Node.prototype.usage = function(countLog) {
-  var usage = 0;
-  return usage;
-}
-
-Node.prototype.clientActivity = function() {
-  return 0
-}
-
-// networkActivity returns a tuple of values: [outgoing throughput,
-// incoming throughput, average latency]. Throughput values are in
-// bytes / s; latency is in milliseconds.
-Node.prototype.networkActivity = function(filter) {
-  var activity = [0, 0, 0],
-      count = 0;
-  for (var key in this.routes) {
-    var route = this.routes[key];
-    if (filter == null || (route.target.id in filter)) {
-      activity[0] += route.getThroughput()
-      activity[1] += route.target.routes[this.id].getThroughput();
-      activity[2] += route.latency;
-      count++;
-    }
-  }
-  activity[2] /= count;
-  return activity;
-}
-
 /* visualization.js */
 
 function layoutProjection(model) {
@@ -891,20 +946,24 @@ function layoutProjection(model) {
     .on("zoom", function() {
       // Instead of translating the projection, rotate it (compute yaw as longitudinal rotation).
       var t = model.zoom.translate(),
-          s = model.zoom.scale(),
-          yaw = 360 * (t[0] - model.width() / 2) / model.width() * (minScale / s);
-      // Compute limits for vertical translation based on max latitude.
+          s = model.zoom.scale();
+      // Compute limits for horizontal and vertical translation based on max latitude.
       model.projection.scale(s).translate([0, 0]);
-      var p = model.projection([0, maxLatitude]);
+      var p = model.projection([180, maxLatitude]);
+      if (t[0] > p[0]) {
+        t[0] = p[0];
+      } else if (t[0] + p[0] < model.width()) {
+        t[0] = model.width() - p[0];
+      }
       if (t[1] > -p[1]) {
         t[1] = -p[1];
-      }
-      if (t[1] - p[1] < model.height()) {
+      } else if (t[1] - p[1] < model.height()) {
         t[1] = model.height() + p[1];
       }
-      t[0] = model.width() / 2;
+      if (t[0] != model.zoom.translate()[0] || t[1] != model.zoom.translate()[1]) {
+        model.zoom.translate(t);
+      }
       model.projection
-        .rotate([yaw, 0])
         .translate(t)
         .scale(s);
 
