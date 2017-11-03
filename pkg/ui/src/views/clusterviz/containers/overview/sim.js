@@ -130,13 +130,30 @@ function nodeClientActivity(node, model) {
 // networkActivity returns a tuple of values: [outgoing throughput,
 // incoming throughput, average latency]. Throughput values are in
 // bytes / s; latency is in milliseconds.
-function nodeNetworkActivity(node, filter) {
-  var activity = [0, 0, 0],
+function nodeNetworkActivity(node, model, filter) {
+  var last = model.getLastStatus(nodeID(node), node.updated_at),
+      activity = [0, 0, 0],
       count = 0;
+
+  if (last != null) {
+    var seconds = node.updated_at.subtract(last.updated_at).divide(1000000).toNumber() / 1000;
+    for (var key in node.incoming) {
+      if (filter == null || (key in filter)) {
+        if (key in last.outgoing) {
+          activity[0] += (node.outgoing[key] - last.outgoing[key]) / seconds;
+        }
+      }
+    }
+    for (var key in node.incoming) {
+      if (filter == null || (key in filter)) {
+        if (key in last.incoming) {
+          activity[1] += (node.incoming[key] - last.outgoing[key]) / seconds;
+        }
+      }
+    }
+  }
   for (var key in node.latencies) {
     if (filter == null || (key in filter)) {
-      activity[0] += 0; /* outgoing throughput */
-      activity[1] += 0; /* incoming throughput */
       activity[2] += node.latencies[key];
       count++;
     }
@@ -561,7 +578,7 @@ Locality.prototype.clientActivity = function() {
 Locality.prototype.totalNetworkActivity = function() {
   var total = [0, 0];
   for (var i = 0; i < this.nodes.length; i++) {
-    var activity = nodeNetworkActivity(this.nodes[i], null);
+    var activity = nodeNetworkActivity(this.nodes[i], this.model, null);
     total = [total[0] + activity[0], total[1] + activity[1]];
   }
   var activity = total[0] + total[1]
@@ -590,7 +607,7 @@ LocalityLink.prototype.networkActivity = function() {
   var total = [0, 0, 0],
       count = 0;
   for (var i = 0; i < this.l1.nodes.length; i++) {
-    var activity = nodeNetworkActivity(this.l1.nodes[i], filter);
+    var activity = nodeNetworkActivity(this.l1.nodes[i], this.model, filter);
     total = [total[0] + activity[0], total[1] + activity[1], total[2] + activity[2]];
     count++;
   }
