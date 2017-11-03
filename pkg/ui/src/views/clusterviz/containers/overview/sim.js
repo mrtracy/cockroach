@@ -46,10 +46,6 @@ export function initNodeCanvas(svg) {
     model.setLocality(event.state.locality);
     zoomToLocality(model, 750);
   }
-  window.addEventListener("resize", function() {
-    model.setLocality(model.currentLocality);
-    zoomToLocality(model, 0);
-  });
 
   return model;
 }
@@ -58,6 +54,8 @@ export function updateNodeCanvas(model, nodesSummary) {
   var first = model.nodes.length == 0 && nodesSummary.nodeStatuses.length > 0;
   model.livenesses = nodesSummary.livenessStatusByNodeID;
   model.nodes = nodesSummary.nodeStatuses;
+  model.updateNodeHistory(nodesSummary.nodeStatusByID);
+
   model.resetLocalities();
   if (first) {
     zoomToLocality(model, 0);
@@ -115,12 +113,18 @@ function nodeCapacity(node) {
   return node.metrics[MetricConstants.availableCapacity];
 }
 
-function nodeClientActivity(node) {
-  return node.metrics["sql.select.count"] +
-    node.metrics["sql.distsql.select.count"] +
-    node.metrics["sql.update.count"] +
-    node.metrics["sql.insert.count"] +
-    node.metrics["sql.delete.count"];
+function nodeClientActivity(node, model) {
+  var last = model.getLastStatus(nodeID(node), node.updated_at);
+  if (last == null) {
+    return 0;
+  }
+  var seconds = node.updated_at.subtract(last.updated_at).divide(1000000).toNumber() / 1000,
+      totalQPS = (node.metrics["sql.select.count"] - last.metrics["sql.select.count"]) +
+      (node.metrics["sql.distsql.select.count"] - last.metrics["sql.distsql.select.count"]) +
+      (node.metrics["sql.update.count"] - last.metrics["sql.update.count"]) +
+      (node.metrics["sql.insert.count"] - last.metrics["sql.insert.count"]) +
+      (node.metrics["sql.delete.count"] - last.metrics["sql.delete.count"]);
+  return totalQPS / seconds;
 }
 
 // networkActivity returns a tuple of values: [outgoing throughput,
@@ -147,14 +151,45 @@ function Model(svgParent, svg) {
   this.svgParent = svgParent;
   this.svg = svg;
 
-  this.localityRadius = 35;
+  this.localityRadius = 42;
   this.nodes = [];
+  this.nodeHistory = {};
   this.livenesses = [];
   this.localities = [];
   this.currentLocality = [];
   this.maxClientActivity = 1;
   this.maxNetworkActivity = 1;
   this.projection = d3.geo.mercator();
+}
+
+Model.prototype.updateNodeHistory = function(statusByID) {
+  var maxHistory = 2; // max 2 historical results
+  for (var key in statusByID) {
+    if (!(key in this.nodeHistory)) {
+      this.nodeHistory[key] = [statusByID[key]];
+    } else {
+      var history = this.nodeHistory[key];
+      if (history[history.length - 1].updated_at.lessThan(statusByID[key].updated_at)) {
+        this.nodeHistory[key].push(statusByID[key]);
+        if (this.nodeHistory[key].length > maxHistory) {
+          this.nodeHistory[key] = this.nodeHistory[key].slice(1);
+        }
+      }
+    }
+  }
+}
+
+Model.prototype.getLastStatus = function(nodeID, updatedAt) {
+  if (!(nodeID in this.nodeHistory)) {
+    return null;
+  }
+  for (var i = this.nodeHistory[nodeID].length - 1; i >= 0; i--) {
+    var status = this.nodeHistory[nodeID][i];
+    if (status.updated_at.lessThan(updatedAt)) {
+      return status;
+    }
+  }
+  return null;
 }
 
 Model.prototype.width = function() {
@@ -463,7 +498,7 @@ Locality.prototype.findCentroid = function() {
 }
 
 function computeAngle(i, count) {
-  return 2 * Math.PI * (i + 1) / count - Math.PI / 2;
+  return 2 * Math.PI * i / count - Math.PI / 2;
 }
 
 // adjustLocation adjusts the locality location so that it lies on a
@@ -515,7 +550,7 @@ Locality.prototype.capacity = function() {
 Locality.prototype.clientActivity = function() {
   var activity = 0;
   for (var i = 0; i < this.nodes.length; i++) {
-    activity += nodeClientActivity(this.nodes[i]);
+    activity += nodeClientActivity(this.nodes[i], this.model);
   }
   if (activity > this.model.maxClientActivity) {
     this.model.maxClientActivity = activity;
@@ -654,14 +689,8 @@ var usStatesBounds = [[-124.626080, 48.987386], [-62.361014, 18.005611]],
 function findScale(b1, b2, factor) {
   if (b1 == b2) {
     return 0.0;
-  } else if (b1 > b2) {
-    var tmp = b1;
-    b1 = b2;
-    b2 = tmp;
   }
-  // Compute scale based on the latitudinal / longitudinal span of
-  // this locality, with a constant factor to provide an inset.
-  return factor / (b2 - b1) / 1.2;
+  return factor / Math.abs(b2 - b1);
 }
 
 function zoomToLocality(model, duration, updateHistory) {
@@ -686,7 +715,7 @@ function zoomToLocality(model, duration, updateHistory) {
   // display purposes.
   if (needAdjust) {
     for (var i = 0; i < model.localities.length; i++) {
-      model.localities[i].adjustLocation(i, model.localities.length, 0.15 * model.width())
+      model.localities[i].adjustLocation(i, model.localities.length, 0.35 * Math.min(model.width(), model.height()))
     }
     bounds = model.bounds();
   }
@@ -765,28 +794,73 @@ function hideLocalityLinks(model, locality) {
 }
 
 function layoutModel(model) {
-  var innerR = model.localityRadius,
-      arcWidth = model.localityRadius * 0.11111,
-      outerR = innerR + arcWidth,
-      locSel = model.svg.selectAll(".locality")
+  // Locality Links
+  var linkSel = model.svg.selectAll(".locality-link-group")
+    .data(model.localityLinks, function(d) { return d.id; });
+  linkSel.exit().remove();
+  var newLinkSel = linkSel.enter().append("g")
+      .attr("class", "locality-link-group")
+      .attr("opacity", 0)
+      .attr("id", function(d) { return d.id; });
+
+  newLinkSel.append("path")
+    .attr("id", function(d) { return d.id + "-path"; })
+    .attr("class", "locality-link");
+
+  newLinkSel.append("text")
+    .attr("id", function(d) { return "incoming-" + d.id; })
+    .append("textPath")
+    .attr("class", "incoming-throughput-label")
+    .attr("startOffset", "50%")
+    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; });
+  newLinkSel.append("text")
+    .attr("id", function(d) { return "outgoing-" + d.id; })
+    .append("textPath")
+    .attr("class", "outgoing-throughput-label")
+    .attr("startOffset", "50%")
+    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; })
+  newLinkSel.append("text")
+    .attr("id", function(d) { return "rtt-" + d.id; })
+    .append("textPath")
+    .attr("class", "rtt-label")
+    .attr("startOffset", "60%")
+    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; })
+
+  newLinkSel.selectAll(".locality-link-group")
+    .append("use")
+    .attr("id", function(d) { return "incoming-" + d.id + "-path"; })
+    .attr("xlink:href", function(d) { return "#incoming-" + d.id; });
+  newLinkSel.selectAll(".locality-link-group")
+    .append("use")
+    .attr("id", function(d) { return "outgoing-" + d.id + "-path"; })
+    .attr("xlink:href", function(d) { return "#outgoing-" + d.id; });
+  newLinkSel.selectAll(".locality-link-group")
+    .append("use")
+    .attr("id", function(d) { return "rtt-" + d.id + "-path"; })
+    .attr("xlink:href", function(d) { return "#rtt-" + d.id; });
+
+  var locSel = model.svg.selectAll(".locality")
       .data(model.localities, function(d) { return d.name(); });
   locSel.exit()
     .transition()
     .duration(250)
-    .style("fill-opacity", 0)
-    .style("stroke-opacity", 0)
+    .attr("opacity", 0)
     .remove();
   var newLocSel = locSel.enter().append("g")
-    .attr("id", function(d) { return d.name(); })
-    .attr("class", "locality")
-    .attr("transform", "translate(" + -100 + ", " + -100 + ")")
-    .on("click", function(d) {
-      if (d.nodes > 1) {
-        hideLocalityLinks(model, d);
-        model.setLocality(d.locality);
-        zoomToLocality(model, 750, true);
-      }
-    });
+      .attr("id", function(d) { return d.name(); })
+      .attr("class", "locality")
+      .attr("transform", "translate(" + -100 + ", " + -100 + ")")
+      .on("click", function(d) {
+        if (d.nodes > 1) {
+          hideLocalityLinks(model, d);
+          model.setLocality(d.locality);
+          zoomToLocality(model, 750, true);
+        }
+      });
+
+  var innerR = model.localityRadius,
+      arcWidth = model.localityRadius * 0.11111,
+      outerR = innerR + arcWidth;
 
   // Capacity arc.
   var capacityG = newLocSel.append("g")
@@ -856,52 +930,6 @@ function layoutModel(model) {
     .on("mouseover", function(d) { showLocalityLinks(model, d); })
     .on("mouseout", function(d) { hideLocalityLinks(model, d); });
 
-
-  // Locality Links
-  var linkSel = model.svg.selectAll(".locality-link-group")
-    .data(model.localityLinks, function(d) { return d.id; });
-  linkSel.exit().remove();
-  var newLinkSel = linkSel.enter().append("g")
-      .attr("class", "locality-link-group")
-      .attr("opacity", 0)
-      .attr("id", function(d) { return d.id; });
-
-  newLinkSel.append("path")
-    .attr("id", function(d) { return d.id + "-path"; })
-    .attr("class", "locality-link");
-
-  newLinkSel.append("text")
-    .attr("id", function(d) { return "incoming-" + d.id; })
-    .append("textPath")
-    .attr("class", "incoming-throughput-label")
-    .attr("startOffset", "50%")
-    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; });
-  newLinkSel.append("text")
-    .attr("id", function(d) { return "outgoing-" + d.id; })
-    .append("textPath")
-    .attr("class", "outgoing-throughput-label")
-    .attr("startOffset", "50%")
-    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; })
-  newLinkSel.append("text")
-    .attr("id", function(d) { return "rtt-" + d.id; })
-    .append("textPath")
-    .attr("class", "rtt-label")
-    .attr("startOffset", "60%")
-    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; })
-
-  newLinkSel.selectAll(".locality-link-group")
-    .append("use")
-    .attr("id", function(d) { return "incoming-" + d.id + "-path"; })
-    .attr("xlink:href", function(d) { return "#incoming-" + d.id; });
-  newLinkSel.selectAll(".locality-link-group")
-    .append("use")
-    .attr("id", function(d) { return "outgoing-" + d.id + "-path"; })
-    .attr("xlink:href", function(d) { return "#outgoing-" + d.id; });
-  newLinkSel.selectAll(".locality-link-group")
-    .append("use")
-    .attr("id", function(d) { return "rtt-" + d.id + "-path"; })
-    .attr("xlink:href", function(d) { return "#rtt-" + d.id; });
-
   model.redraw = function() {
     // Now that we've set the projection and adjusted locality locations
     // in the event there are no differences in location, we can compute
@@ -918,7 +946,7 @@ function layoutModel(model) {
     locSel.attr("transform", function(d) {
       return "translate(" + d.pos + ")scale(" + model.localityScale + ")";
     });
-    linkSel.selectAll(".locality-link")
+    linkSel.select(".locality-link")
       .attr("d", function(d) { return d3.line().curve(d3.curveCardinalOpen.tension(0.5))(d.points); });
 
     updateModel(model, locSel, linkSel);
@@ -932,17 +960,17 @@ function updateModel(model, locSel, linkSel) {
       arcWidth = model.localityRadius * 0.11111,
       outerR = innerR + arcWidth;
 
-  locSel.selectAll(".capacity-label")
+  locSel.select(".capacity-label")
     .attr("x", (outerR + arcWidth) * Math.cos(0))
     .text(function(d) { return bytesToSize(d.capacity()); });
 
-  locSel.selectAll(".capacity-used")
+  locSel.select(".capacity-used")
     .attr("d", function(d) {
       var pct = d.usage() / d.capacity();
       return createArcPath(innerR, outerR, arcAngleFromPct(0), arcAngleFromPct(pct));
     });
 
-  locSel.selectAll(".capacity-used-label")
+  locSel.select(".capacity-used-label")
     .attr("transform", function(d) {
       var pct = d.usage() / d.capacity(),
           x = Math.cos(angleFromPct(pct)),
@@ -955,40 +983,40 @@ function updateModel(model, locSel, linkSel) {
       return (pct < 0.75) ? "end" : "start";
     })
     .text(function(d) { return bytesToSize(d.usage()); });
-  locSel.selectAll(".capacity-used-pct-label")
+  locSel.select(".capacity-used-pct-label")
     .text(function(d) { return Math.round(100 * d.usage() / d.capacity()) + "%"; });
 
   var barsX = innerR * Math.cos(angleFromPct(0)),
       barsWidth = outerR - barsX - 4,
       labelX = outerR + arcWidth,
-      labelH = 8;
-  locSel.selectAll(".client-activity")
+      labelH = 10;
+  locSel.select(".client-activity")
     .transition()
     .duration(250)
     .attr("x1", outerR - 2)
     .attr("y1", -labelH)
     .attr("x2", function(d) { return Math.round(outerR - barsWidth * (d.clientActivity() / model.maxClientActivity)); })
     .attr("y2", -labelH);
-  locSel.selectAll(".client-activity-label")
+  locSel.select(".client-activity-label")
     .attr("x", labelX)
     .attr("y", -labelH)
-    .text(function(d) { return d.clientActivity(); });
-  locSel.selectAll(".network-activity")
+    .text(function(d) { return d3.format(",d")(Math.round(d.clientActivity())) + " qps"; });
+  locSel.select(".network-activity")
     .transition()
     .duration(250)
     .attr("x1", outerR - 2)
     .attr("y1", 0)
     .attr("x2", function(d) { return Math.round(outerR - barsWidth * (d.totalNetworkActivity() / model.maxNetworkActivity)); })
     .attr("y2", 0);
-  locSel.selectAll(".network-activity-label")
+  locSel.select(".network-activity-label")
     .attr("x", labelX)
     .attr("y", 0)
     .text(function(d) { return bytesToActivity(d.totalNetworkActivity()); });
 
-  linkSel.selectAll(".incoming-throughput-label")
+  linkSel.select(".incoming-throughput-label")
     .text(function(d) { return "←" + bytesToActivity(d.networkActivity(null)[1]); });
-  linkSel.selectAll(".outgoing-throughput-label")
+  linkSel.select(".outgoing-throughput-label")
     .text(function(d) { return bytesToActivity(d.networkActivity(null)[0]) + "→"; });
-  linkSel.selectAll(".rtt-label")
+  linkSel.select(".rtt-label")
     .text(function(d) { return latencyMilliseconds(d.networkActivity(null)[2]); });
 }

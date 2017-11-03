@@ -8,9 +8,6 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 }
 
 .locality {
-    stroke: #66a;
-    stroke-width: 1.5px;
-    fill: #fff;
 }
 
 .locality-label {
@@ -28,33 +25,10 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
     stroke-width: 0px;
 }
 
-.status-ring {
-    fill: none;
-    stroke-width: 2px;
-}
-
-.status-ring.available {
-    opacity: 0;
-    visibility: hidden;
-    stroke: #82cc00;
-}
-
-.status-ring.mixed {
-    opacity: 0.5;
-    visibility: visible;
-    stroke: #d9cc4f;
-}
-
-.status-ring.unavailable {
-    opacity: 0.5;
-    visibility: visible;
-    stroke: #d95d4f;
-}
-
 .capacity-background {
     fill: #daeefa;
     stroke: #51bbfd;
-    stroke-width: 0.25px;
+    stroke-width: 0.5px;
 }
 
 .capacity-used {
@@ -77,7 +51,7 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .capacity-label {
     fill: #5abbfd;
     stroke-width: 0px;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: bold;
     text-anchor: start;
 }
@@ -85,14 +59,14 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .capacity-used-label {
     fill: #51bbfd;
     stroke-width: 0px;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: bold;
 }
 
 .capacity-used-pct-label {
     fill: #51bbfd;
     stroke-width: 0px;
-    font-size: 24px;
+    font-size: 28px;
     font-weight: medium;
     alignment-baseline: middle;
     text-anchor: middle;
@@ -101,7 +75,7 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .capacity-used-text {
     fill: #595f6c;
     stroke-width: 0px;
-    font-size: 7px;
+    font-size: 9px;
     font-weight: bold;
     alignmnent-baseline: middle;
     text-anchor: middle;
@@ -110,13 +84,13 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .client-activity {
     stroke: #d95d4f;
     stroke-linecap: round;
-    stroke-width: 4px;
+    stroke-width: 5px;
 }
 
 .client-activity-label {
     fill: #d95d4f;
     stroke-width: 0px;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: bold;
     dominant-baseline: central;
 }
@@ -124,34 +98,34 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .network-activity {
     stroke: #152849;
     stroke-linecap: round;
-    stroke-width: 4px;
+    stroke-width: 5px;
 }
 
 .network-activity-label {
     fill: #152849;
     stroke-width: 0px;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: bold;
     dominant-baseline: central;
 }
 
 .locality-link {
     stroke: #ccc;
-    stroke-width: 1.5px;
+    stroke-width: 2px;
     fill-opacity: 0;
 }
 
 .incoming-throughput-label {
     fill: #8833cc;
     stroke-width: 0px;
-    font-size: 8px;
+    font-size: 10px;
     text-anchor: end;
 }
 
 .outgoing-throughput-label {
     fill: #82cc00;
     stroke-width: 0px;
-    font-size: 8px;
+    font-size: 10px;
     text-anchor: end;
     alignment-baseline: hanging;
 }
@@ -159,7 +133,7 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .rtt-label {
     fill: #152849;
     stroke-width: 0px;
-    font-size: 8px;
+    font-size: 10px;
     text-anchor: start;
     alignment-baseline: middle;
 }
@@ -167,5 +141,5 @@ url('https://fonts.googleapis.com/css?family=Lato:400,700');
 .geopath {
     fill: #f7f7ff;
     stroke: #ccc;
-    stroke-width: .5px;
+    stroke-width: 0.75px;
 }
