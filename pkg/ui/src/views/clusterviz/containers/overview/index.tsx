@@ -9,6 +9,7 @@ import "./sim.css";
 
 interface ClusterVizProps {
     nodesSummary: NodesSummary;
+    statusesValid: boolean;
     refreshNodes: typeof refreshNodes;
     refreshLiveness: typeof refreshLiveness;
 }
@@ -49,7 +50,7 @@ export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
         // background caused the UI to run out of memory and either lag or crash.
         // NOTE: This might not work on Android:
         // http://caniuse.com/#feat=pagevisibility
-        if (!document.hidden) {
+        if (!document.hidden && this.props.nodesSummary.nodeStatuses != null) {
             updateNodeCanvas(this.model, this.props.nodesSummary);
         }
     }
@@ -64,6 +65,7 @@ export class ClusterVizMain extends React.Component<ClusterVizProps, {}> {
 export default connect(
     (state: AdminUIState) => ({
         nodesSummary: nodesSummarySelector(state),
+        statusesValid: state.cachedData.nodes.valid && state.cachedData.liveness.valid,
     }),
     {
         refreshNodes,

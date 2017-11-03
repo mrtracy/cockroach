@@ -5,33 +5,68 @@ import { line, curveCardinalOpen } from "d3-shape";
 import { LivenessStatus } from "src/redux/nodes";
 import { MetricConstants } from "src/util/proto";
 
+import worldGeoPaths from "./world.json";
+import usStatesGeoPaths from "./us-states.json";
+
 d3.line = line;
 d3.curveCardinalOpen = curveCardinalOpen;
 
-function Node(name, locality) {
-  this.desc = {
-    node_id: name,
-    address: {
-      network_field: name,
-      address_field: name,
-    },
-    locality: {
-      tiers: locality,
-    },
-  };
-  this.metrics = {
-    [MetricConstants.usedCapacity]: 0,
-    [MetricConstants.availableCapacity]: 50,
-    "sql.select.count": 0,
-    "sql.distsql.select.count": 0,
-    "sql.update.count": 0,
-    "sql.insert.count": 0,
-    "sql.delete.count": 0,
-  };
-  this.latencies = {
-    // In nanoseconds
-  };
+// Temporary hard-coded locations.
+var locations = {
+  "city=New York City": [-74.00597, 40.71427],
+  "city=Miami": [-80.19366, 25.77427],
+  "city=Des Moines": [-93.60911, 41.60054],
+  "city=Los Angeles": [-118.24368, 34.05223],
+  "city=Seattle": [-122.33207, 47.60621],
+  "city=London": [-0.12574, 51.50853],
+  "city=Berlin": [13.41053, 52.52437],
+  "city=Stockholm": [18.0649, 59.33258],
+  "city=Sydney": [151.20732, -33.86785],
+  "city=Melbourne": [144.96332, -37.814],
+  "city=Brisbane": [153.02809, -27.46794],
+  "city=Beijing": [116.39723, 39.9075],
+  "city=Shanghai": [121.45806, 31.22222],
+  "city=Shenzhen": [114.0683, 22.54554],
+  "city=Mumbai": [72.88261, 19.07283],
+  "city=Bangalore": [77.59369, 12.97194],
+  "city=New Delhi": [77.22445, 28.63576],
+};
+
+export function initNodeCanvas(svg) {
+  var model = new Model(svg, d3.select(svg));
+
+  layoutProjection(model);
+
+  window.onpopstate = function(event) {
+    if (event.state == null) {
+      model.setLocality([]);
+      zoomToLocality(model, 750);
+      return;
+    }
+    model.setLocality(event.state.locality);
+    zoomToLocality(model, 750);
+  }
+  window.addEventListener("resize", function() {
+    model.setLocality(model.currentLocality);
+    zoomToLocality(model, 0);
+  });
+
+  return model;
 }
+
+export function updateNodeCanvas(model, nodesSummary) {
+  var first = model.nodes.length == 0 && nodesSummary.nodeStatuses.length > 0;
+  model.livenesses = nodesSummary.livenessStatusByNodeID;
+  model.nodes = nodesSummary.nodeStatuses;
+  model.resetLocalities();
+  if (first) {
+    zoomToLocality(model, 0);
+  } else {
+    model.redraw();
+  }
+}
+
+/* node */
 
 function nodeID(node) {
   return node.desc.node_id;
@@ -58,32 +93,11 @@ function nodeLocality(node) {
   return locality;
 }
 
-// Temporary hard-coded locations.
-var locations = {
-  "city=New York City": [-74.00597, 40.71427],
-  "city=Miami": [-80.19366, 25.77427],
-  "city=Des Moines": [-93.60911, 41.60054],
-  "city=Los Angeles": [-118.24368, 34.05223],
-  "city=Seattle": [-122.33207, 47.60621],
-  "city=London": [-0.12574, 51.50853],
-  "city=Berlin": [13.41053, 52.52437],
-  "city=Stockholm": [18.0649, 59.33258],
-  "city=Sydney": [151.20732, -33.86785],
-  "city=Melbourne": [144.96332, -37.814],
-  "city=Brisbane": [153.02809, -27.46794],
-  "city=Beijing": [116.39723, 39.9075],
-  "city=Shanghai": [121.45806, 31.22222],
-  "city=Shenzhen": [114.0683, 22.54554],
-  "city=Mumbai": [72.88261, 19.07283],
-  "city=Bangalore": [77.59369, 12.97194],
-  "city=New Delhi": [77.22445, 28.63576],
-};
-
 function nodeLocation(node) {
   var locality = nodeLocality(node);
-  for (var i = 0; i < locality.length; i++) {
-    if (locality[i] in locations) {
-      return locations[locality[i]];
+  for (var loc of locality) {
+    if (loc in locations) {
+      return locations[loc];
     }
   }
   return [0, 0];
@@ -127,477 +141,73 @@ function nodeNetworkActivity(node, filter) {
   return activity;
 }
 
-var useGlobalNodes = true,
-    globalNodes = [];
+/* model */
 
-// Facility creates a new facility location. The arguments are the city
-// name that the facility exists in, the locality in which it's organized,
-// the number of racks, and the number of nodes per rack.
-function Facility(locality, racks, nodesPerRack) {
-  // Add racks and nodes for each facility.
-  for (var k = 0; k < racks; k++) {
-    for (var l = 0; l < nodesPerRack; l++) {
-      var nodeLocality = _.clone(locality);
-      if (this.racks > 1) {
-        nodeLocality.push({key: "rack", value: k});
-      }
-      globalNodes.push(new Node("10.10." + (k + 1) + "." + (l + 1), nodeLocality));
+function Model(svgParent, svg) {
+  this.svgParent = svgParent;
+  this.svg = svg;
+
+  this.localityRadius = 35;
+  this.nodes = [];
+  this.livenesses = [];
+  this.localities = [];
+  this.currentLocality = [];
+  this.maxClientActivity = 1;
+  this.maxNetworkActivity = 1;
+  this.projection = d3.geo.mercator();
+}
+
+Model.prototype.width = function() {
+  return this.svgParent.clientWidth;
+}
+
+Model.prototype.height = function() {
+  return this.svgParent.clientHeight;
+}
+
+Model.prototype.maxRadius = function() {
+  return this.localityRadius * 1.6;
+}
+
+// bounds returns longitude / latitude pairs representing the minimum
+// and maximum bounds.
+Model.prototype.bounds = function() {
+  var locXYMin = [180, -90],
+      locXYMax = [-180, 90];
+
+  for (var locality of this.localities) {
+    var loc = locality.location;
+    if (loc[0] < locXYMin[0]) {
+      locXYMin[0] = loc[0];
+    }
+    if (loc[0] > locXYMax[0]) {
+      locXYMax[0] = loc[0];
+    }
+    if (loc[1] > locXYMin[1]) {
+      locXYMin[1] = loc[1];
+    }
+    if (loc[1] < locXYMax[1]) {
+      locXYMax[1] = loc[1];
     }
   }
+
+  return [locXYMin, locXYMax];
 }
 
-// Facilities.
-new Facility([{key: "region", value: "United States"}, {key: "city", value: "New York City"}], 1, 6);
-new Facility([{key: "region", value: "United States"}, {key: "city", value: "Miami"}], 1, 6);
-new Facility([{key: "region", value: "United States"}, {key: "city", value: "Des Moines"}], 1, 6);
-new Facility([{key: "region", value: "United States"}, {key: "city", value: "Los Angeles"}], 1, 6);
-new Facility([{key: "region", value: "United States"}, {key: "city", value: "Seattle"}], 1, 6);
-new Facility([{key: "region", value: "European Union"}, {key: "city", value: "London"}], 1, 5);
-new Facility([{key: "region", value: "European Union"}, {key: "city", value: "Berlin"}], 1, 5);
-new Facility([{key: "region", value: "European Union"}, {key: "city", value: "Stockholm"}], 1, 5);
-new Facility([{key: "region", value: "Australia"}, {key: "city", value: "Sydney"}], 1, 3);
-new Facility([{key: "region", value: "Australia"}, {key: "city", value: "Melbourne"}], 1, 3);
-new Facility([{key: "region", value: "Australia"}, {key: "city", value: "Brisbane"}], 1, 3);
-new Facility([{key: "region", value: "China"}, {key: "city", value: "Beijing"}], 1, 8);
-new Facility([{key: "region", value: "China"}, {key: "city", value: "Shanghai"}], 1, 8);
-new Facility([{key: "region", value: "China"}, {key: "city", value: "Shenzhen"}], 1, 8);
-new Facility([{key: "region", value: "India"}, {key: "city", value: "Mumbai"}], 1, 7);
-new Facility([{key: "region", value: "India"}, {key: "city", value: "Bangalore"}], 1, 7);
-new Facility([{key: "region", value: "India"}, {key: "city", value: "New Delhi"}], 1, 7);
+Model.prototype.setLocality = function(locality) {
+  this.currentLocality = locality;
+  this.resetLocalities();
+}
 
-export function initNodeCanvas(svg) {
-  var model = new Model("Global", svg, d3.select(svg));
-
-  layoutProjection(model);
-
-  window.onpopstate = function(event) {
-    if (event.state == null) {
-      zoomToLocality(model, 750, []);
-      return;
-    }
-    var locality = event.state.locality;
-    zoomToLocality(model, 750, locality);
+Model.prototype.addLocality = function(locality) {
+  for (var i = 0; i < this.localities.length; i++) {
+    // Add localityLinks from all pre-existing localities to this newly added locality.
+    var oLocality = this.localities[i];
+    this.localityLinks.push(new LocalityLink(oLocality, locality, this));
   }
-  window.addEventListener("resize", function() { zoomToLocality(model, 0, model.currentLocality); });
 
-  return model;
-}
-
-export function updateNodeCanvas(model, nodesSummary) {
-  model.resetLocalities();
-  if (useGlobalNodes) {
-    model.nodes = globalNodes;
-  } else {
-    model.livenesses = nodesSummary.livenessStatusByNodeID;
-    model.nodes = nodesSummary.nodeStatuses;
-    console.log(nodesSummary);
-  }
-  zoomToLocality(model, 750, model.currentLocality);
-}
-
-/* localities.js */
-
-// createArcPath returns an svg arc object. startAngle and endAngle are
-// expressed in radians.
-function createArcPath(innerR, outerR, startAngle, endAngle) {
-  return d3.svg.arc()
-    .innerRadius(innerR)
-    .outerRadius(outerR)
-    .startAngle(startAngle)
-    .endAngle(endAngle)()
-}
-
-function drawBox(w, h, cornerPct) {
-  var c = w * cornerPct;
-  return "M" + c + ",0 L" + (w-c) + ",0 A" + c + "," + c + " 0 0 1 " + w + "," + c +
-    " L" + w + "," + (h-c) + " A" + c + "," + c + " 0 0 1 " + (w-c) + "," + h +
-    " L" + c + "," + h + " A" + c + "," + c + " 0 0 1 0," + (h-c) +
-    " L0," + c + " A" + c + "," + c + " 0 0 1 " + c + ",0 Z";
-}
-
-function arcAngleFromPct(pct) {
-  return Math.PI * (pct * 1.25 - 0.75);
-}
-
-function angleFromPct(pct) {
-  return Math.PI * (-1.25 + 1.25 * pct);
-}
-
-function bytesToSize(bytes) {
-  var sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  if (bytes == 0) return '0 B';
-  var i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)));
-  return Math.round(bytes * 10 / Math.pow(1024, i), 2) / 10 + ' ' + sizes[i];
-}
-
-function bytesToActivity(bytes) {
-  var sizes = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s', 'TiB/s'];
-  if (bytes < 1) return '0 B/s';
-  var i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)));
-  return Math.round(bytes * 10 / Math.pow(1024, i), 2) / 10 + ' ' + sizes[i];
-}
-
-function latencyMilliseconds(latency) {
-  return Math.round(latency * 10) / 10 + ' ms';
-}
-
-function showLocalityLinks(model, locality) {
-  model.svg.selectAll(".locality-link-group")
-    .transition()
-    .duration(250)
-    .attr("visibility", function(d) { return (d.l1 == locality || d.l2 == locality) ? "visible" : "hidden"; })
-    .attr("opacity", function(d) { return (d.l1 == locality || d.l2 == locality) ? 1 : 0; });
-}
-
-function hideLocalityLinks(model, locality) {
-  model.svg.selectAll(".locality-link-group")
-    .transition()
-    .duration(250)
-    .attr("visibility", "hidden")
-    .attr("opacity", 0);
-}
-
-function Localities() {
-}
-
-Localities.prototype.maxRadius = function(model) {
-  return model.localityRadius * 1.6;
-}
-
-Localities.prototype.locality = function(model, sel) {
-  var innerR = model.localityRadius,
-      arcWidth = model.localityRadius * 0.11111,
-      outerR = innerR + arcWidth,
-      maxRadius = this.maxRadius(model);
-
-  sel.attr("transform", "translate(" + -100 + ", " + -100 + ")");
-
-  // Locality status ring.
-  var statusRings = sel.append("circle")
-      .attr("class", "status-ring available");
-  /*
-  // TODO(spencer): this code causes ridiculous CPU usage. Need to fix before reenabling.
-  repeat();
-  function repeat() {
-    statusRings.attr("r", maxRadius * 1.4)
-      .transition()
-      .duration(750)
-      .ease("linear")
-      .attr("r", maxRadius * 1.5)
-      .transition()
-      .duration(750)
-      .ease("linear")
-      .attr("r", maxRadius * 1.4)
-      .each("end", repeat);
-  }
-  */
-
-  // Capacity arc.
-  var capacityG = sel.append("g")
-      .attr("class", "capacity-centric");
-
-  capacityG.append("path")
-    .attr("d", function(d) { return createArcPath(innerR, outerR, arcAngleFromPct(0), arcAngleFromPct(1)); })
-    .attr("class", "capacity-background");
-  capacityG.append("text")
-    .attr("class", "capacity-label");
-
-  // Used capacity arc.
-  var usedG = capacityG.append("g");
-  usedG.append("path")
-    .attr("class", "capacity-used");
-  usedG.append("text")
-    .attr("class", "capacity-used-label");
-
-  // Capacity labels.
-  var capacityLabels = capacityG.append("g")
-      .attr("transform", "translate(" + -outerR + ", " + -outerR + ")");
-  var capacityLabelsSVG = capacityLabels.append("svg")
-      .attr("width", outerR * 2)
-      .attr("height", outerR * 2);
-  capacityLabelsSVG.append("text")
-    .attr("class", "capacity-used-pct-label")
-    .attr("x", "50%")
-    .attr("y", "40%");
-  capacityLabelsSVG.append("text")
-    .attr("class", "capacity-used-text")
-    .attr("x", "50%")
-    .attr("y", "60%")
-    .text("CAPACITY USED");
-
-  // Client / network activity.
-  var activityG = capacityG.append("g")
-      .attr("transform", "translate(" + 0 + ", " + (innerR * Math.sin(angleFromPct(0))) + ")");
-  activityG.append("line")
-    .attr("class", "client-activity");
-  activityG.append("text")
-    .attr("class", "client-activity-label");
-  activityG.append("line")
-    .attr("class", "network-activity");
-  activityG.append("text")
-    .attr("class", "network-activity-label");
-
-  // Locality label.
-  var localityLabels = capacityG.append("g")
-      .attr("transform", "translate(" + -outerR + ", " + outerR * 0.9 + ")");
-  localityLabels.append("path")
-    .attr("d", function(d) { return drawBox(outerR * 2, 20, 0.05); })
-    .attr("class", "locality-label-background")
-  localityLabels.append("svg")
-    .attr("width", function(d) { return outerR * 2 })
-    .attr("height", "20")
-    .append("text")
-    .attr("class", "locality-label")
-    .attr("x", "50%")
-    .attr("y", "55%")
-    .text(function(d) { return d.name; });
-
-  // Circle for showing inter-locality network links.
-  capacityG.append("circle")
-    .style("opacity", 0)
-    .attr("r", innerR - arcWidth * 2)
-    .style("cursor", "pointer")
-    .on("mouseover", function(d) { showLocalityLinks(model, d); })
-    .on("mouseout", function(d) { hideLocalityLinks(model, d); });
-}
-
-Localities.prototype.localityLink = function(model, sel) {
-  sel.append("path")
-    .attr("id", function(d) { return d.id + "-path"; })
-    .attr("class", "locality-link");
-
-  sel.append("text")
-    .attr("id", function(d) { return "incoming-" + d.id; })
-    .append("textPath")
-    .attr("class", "incoming-throughput-label")
-    .attr("startOffset", "50%")
-    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; });
-  sel.append("text")
-    .attr("id", function(d) { return "outgoing-" + d.id; })
-    .append("textPath")
-    .attr("class", "outgoing-throughput-label")
-    .attr("startOffset", "50%")
-    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; })
-  sel.append("text")
-    .attr("id", function(d) { return "rtt-" + d.id; })
-    .append("textPath")
-    .attr("class", "rtt-label")
-    .attr("startOffset", "60%")
-    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; })
-
-  sel.selectAll(".locality-link-group")
-    .append("use")
-    .attr("id", function(d) { return "incoming-" + d.id + "-path"; })
-    .attr("xlink:href", function(d) { return "#incoming-" + d.id; });
-  sel.selectAll(".locality-link-group")
-    .append("use")
-    .attr("id", function(d) { return "outgoing-" + d.id + "-path"; })
-    .attr("xlink:href", function(d) { return "#outgoing-" + d.id; });
-  sel.selectAll(".locality-link-group")
-    .append("use")
-    .attr("id", function(d) { return "rtt-" + d.id + "-path"; })
-    .attr("xlink:href", function(d) { return "#rtt-" + d.id; });
-}
-
-Localities.prototype.update = function(model) {
-  var innerR = model.localityRadius,
-      arcWidth = model.localityRadius * 0.11111,
-      outerR = innerR + arcWidth,
-      locSel = model.localitySel,
-      linkSel = model.localityLinkSel;
-
-  locSel.selectAll(".status-ring")
-    .attr("class", function(d) { return "status-ring " + d.state(); });
-
-  locSel.selectAll(".capacity-label")
-    .attr("x", (outerR + arcWidth) * Math.cos(0))
-    .text(function(d) { return bytesToSize(d.capacity() * model.unitSize); });
-
-  locSel.selectAll(".capacity-used")
-    .attr("d", function(d) {
-      var pct = d.usage() / d.capacity();
-      return createArcPath(innerR, outerR, arcAngleFromPct(0), arcAngleFromPct(pct));
-    });
-
-  locSel.selectAll(".capacity-used-label")
-    .attr("transform", function(d) {
-      var pct = d.usage() / d.capacity(),
-          x = Math.cos(angleFromPct(pct)),
-          y = Math.sin(angleFromPct(pct)),
-          radius = outerR + arcWidth;
-      return "translate(" + (x * radius) + "," + (y * radius) + ")";
-    })
-    .attr("text-anchor", function(d) {
-      var pct = d.usage() / d.capacity();
-      return (pct < 0.75) ? "end" : "start";
-    })
-    .text(function(d) { return bytesToSize(d.usage() * model.unitSize); });
-  locSel.selectAll(".capacity-used-pct-label")
-    .text(function(d) { return Math.round(100 * d.usage() / d.capacity()) + "%"; });
-
-  var barsX = innerR * Math.cos(angleFromPct(0)),
-      barsWidth = outerR - barsX - 4,
-      labelX = outerR + arcWidth,
-      labelH = 8;
-  locSel.selectAll(".client-activity")
-    .transition()
-    .duration(250)
-    .attr("x1", outerR - 2)
-    .attr("y1", -labelH)
-    .attr("x2", function(d) { return Math.round(outerR - barsWidth * (d.clientActivity() / model.maxClientActivity)); })
-    .attr("y2", -labelH);
-  locSel.selectAll(".client-activity-label")
-    .attr("x", labelX)
-    .attr("y", -labelH)
-    .text(function(d) { return bytesToActivity(d.clientActivity() * model.unitSize); });
-  locSel.selectAll(".network-activity")
-    .transition()
-    .duration(250)
-    .attr("x1", outerR - 2)
-    .attr("y1", 0)
-    .attr("x2", function(d) { return Math.round(outerR - barsWidth * (d.totalNetworkActivity() / model.maxNetworkActivity)); })
-    .attr("y2", 0);
-  locSel.selectAll(".network-activity-label")
-    .attr("x", labelX)
-    .attr("y", 0)
-    .text(function(d) { return bytesToActivity(d.totalNetworkActivity() * model.unitSize); });
-
-  linkSel.selectAll(".incoming-throughput-label")
-    .text(function(d) { return "←" + bytesToActivity(d.networkActivity(null)[1] * model.unitSize); });
-  linkSel.selectAll(".outgoing-throughput-label")
-    .text(function(d) { return bytesToActivity(d.networkActivity(null)[0] * model.unitSize) + "→"; });
-  linkSel.selectAll(".rtt-label")
-    .text(function(d) { return latencyMilliseconds(d.networkActivity(null)[2]); });
-}
-
-/* locality.js */
-
-function Locality(locality, nodes, model) {
-  this.id = "loc" + model.localityCount++;
-  this.name = localityName(locality, model);
-  this.locality = locality;
-  this.links = {};
-  this.nodes = nodes;
-  this.clazz = "locality";
-  this.model = model;
-  this.location = this.findCentroid();
-  this.model.addLocality(this);
-}
-
-Locality.prototype.findCentroid = function() {
-  var centroid = [0, 0];
-  for (var i = 0; i < this.nodes.length; i++) {
-    centroid = [centroid[0] + nodeLocation(this.nodes[i])[0],
-                centroid[1] + nodeLocation(this.nodes[i])[1]];
-  }
-  return [centroid[0] / this.nodes.length, centroid[1] / this.nodes.length];
-}
-
-function computeAngle(i, count) {
-  return 2 * Math.PI * (i + 1) / count - Math.PI / 2;
-}
-
-// adjustLocation adjusts the locality location so that it lies on a
-// circle of size radius at an angle defined by computeAngle(i, count).
-Locality.prototype.adjustLocation = function(i, count, radius) {
-  var angle = computeAngle(i, count),
-      xy = this.model.projection(this.location),
-      xyAdjusted = [xy[0] + radius * Math.cos(angle), xy[1] + radius * Math.sin(angle)];
-  this.location = this.model.projection.invert(xyAdjusted);
-  for (var i = 0; i < this.nodes.length; i++) {
-    nodeAdjustLocation(this.nodes[i], this.location);
-  }
-}
-
-Locality.prototype.state = function() {
-  var liveCount = this.liveCount();
-  if (liveCount == 0) {
-    return "unavailable";
-  } else if (liveCount < this.nodes.length) {
-    return "mixed";
-  }
-  return "available";
-}
-
-Locality.prototype.liveCount = function() {
-  var count = 0;
-  for (var i = 0; i < this.nodes.length; i++) {
-    count += (nodeState(this.nodes[i]) == LivenessStatus.HEALTHY) ? 1 : 0;
-  }
-  return count;
-}
-
-Locality.prototype.usage = function() {
-  var usage = 0;
-  for (var i = 0; i < this.nodes.length; i++) {
-    usage += nodeUsage(this.nodes[i]);
-  }
-  return usage;
-}
-
-Locality.prototype.capacity = function() {
-  var capacity = 0;
-  for (var i = 0; i < this.nodes.length; i++) {
-    capacity += nodeCapacity(this.nodes[i]);
-  }
-  return capacity;
-}
-
-Locality.prototype.clientActivity = function() {
-  var activity = 0;
-  for (var i = 0; i < this.nodes.length; i++) {
-    activity += nodeClientActivity(this.nodes[i]);
-  }
-  if (activity > this.model.maxClientActivity) {
-    this.model.maxClientActivity = activity;
-  }
-  return activity;
-}
-
-Locality.prototype.totalNetworkActivity = function() {
-  var total = [0, 0];
-  for (var i = 0; i < this.nodes.length; i++) {
-    var activity = nodeNetworkActivity(this.nodes[i], null);
-    total = [total[0] + activity[0], total[1] + activity[1]];
-  }
-  var activity = total[0] + total[1]
-  if (activity > this.model.maxNetworkActivity) {
-    this.model.maxNetworkActivity = activity;
-  }
-  return activity;
-}
-
-// localityName extracts the locality name as the first element of the
-// locality array and strips out any leading ".*=" pattern.
-function localityName(locality, model) {
-  if (locality.length == 0) {
-    return model.id;
-  }
-  var name = locality[locality.length - 1],
-      idx = name.indexOf("=");
-  if (idx != -1) {
-    return name.substr(idx + 1, name.length);
-  }
-  return name;
-}
-
-function fullLocalityName(locality, model) {
-  if (locality.length == 0) {
-    return model.id;
-  }
-  var fullName = "";
-  for (var i = 0; i < locality.length; i++) {
-    var name = locality[i],
-        idx = name.indexOf("=");
-    if (idx != -1) {
-      name = name.substr(idx + 1, name.length);
-    }
-    if (fullName.length > 0) {
-      fullName += " / ";
-    }
-    fullName += name;
-  }
-  return fullName;
+  // Add to array of datacenters.
+  this.localities.push(locality);
 }
 
 // localityKey concatenates locality information into a comma-separated
@@ -625,113 +235,6 @@ function localityHasPrefix(locality, prefix) {
     }
   }
   return true;
-}
-
-/* locality_link.js */
-
-function LocalityLink(l1, l2, model) {
-  this.id = "loc-link" + model.localityLinkCount++;
-  this.l1 = l1;
-  this.l2 = l2;
-  this.clazz = "locality-link";
-  this.model = model;
-}
-
-// networkActivity returns a tuple of values: [outgoing throughput,
-// incoming throughput, average latency].
-LocalityLink.prototype.networkActivity = function() {
-  var filter = {};
-  for (var i = 0; i < this.l2.nodes.length; i++) {
-    filter[this.l2.nodes[i].id] = null;
-  }
-  var total = [0, 0, 0],
-      count = 0;
-  for (var i = 0; i < this.l1.nodes.length; i++) {
-    var activity = nodeNetworkActivity(this.l1.nodes[i], filter);
-    total = [total[0] + activity[0], total[1] + activity[1], total[2] + activity[2]];
-    count++;
-  }
-  total[2] /= count;
-  return total;
-}
-
-/* model.js */
-
-function Model(id, svgParent, svg) {
-  this.id = id;
-  this.svgParent = svgParent;
-  this.svg = svg;
-
-  this.localityRadius = 36;
-  this.nodeCapacity = 50.0;
-  this.unitSize = 64<<20;
-  this.nodes = [];
-
-  this.currentLocality = [];
-  this.localities = null;
-  this.localityCount = 0;
-  this.localityLinks = [];
-  this.localityLinkCount = 0;
-
-  this.maxClientActivity = 1;
-  this.maxNetworkActivity = 1;
-
-  this.projection = d3.geo.mercator();
-  this.skin = new Localities();
-}
-
-Model.prototype.width = function() {
-  return this.svgParent.clientWidth;
-}
-
-Model.prototype.height = function() {
-  return this.svgParent.clientHeight;
-}
-
-// bounds returns longitude / latitude pairs representing the minimum
-// and maximum bounds.
-Model.prototype.bounds = function() {
-  var locXYMin = [180, -90],
-      locXYMax = [-180, 90];
-
-  for (var i = 0; i < this.localities.length; i++) {
-    var loc = this.localities[i];
-    if (loc.location[0] < locXYMin[0]) {
-      locXYMin[0] = loc.location[0];
-    }
-    if (loc.location[0] > locXYMax[0]) {
-      locXYMax[0] = loc.location[0];
-    }
-    if (loc.location[1] > locXYMin[1]) {
-      locXYMin[1] = loc.location[1];
-    }
-    if (loc.location[1] < locXYMax[1]) {
-      locXYMax[1] = loc.location[1];
-    }
-  }
-
-  return [locXYMin, locXYMax];
-}
-
-Model.prototype.setLocality = function(locality) {
-  if (this.localities != null &&
-      this.currentLocality.length == locality.length &&
-      this.currentLocality.every(function(v,i) { return v === locality[i]})) {
-    return;
-  }
-  this.currentLocality = locality;
-  this.resetLocalities();
-}
-
-Model.prototype.addLocality = function(locality) {
-  for (var i = 0; i < this.localities.length; i++) {
-    // Add localityLinks from all pre-existing localities to this newly added locality.
-    var oLocality = this.localities[i];
-    this.localityLinks.push(new LocalityLink(oLocality, locality, this));
-  }
-
-  // Add to array of datacenters.
-  this.localities.push(locality);
 }
 
 Model.prototype.resetLocalities = function() {
@@ -763,7 +266,7 @@ Model.prototype.resetLocalities = function() {
     l.clientActivity();
     l.totalNetworkActivity();
   }
-  this.layout();
+  layoutModel(this);
 }
 
 function distance(n1, n2) {
@@ -808,7 +311,7 @@ function dotprod(v1, v2) {
 // localities.
 Model.prototype.computeLocalityScale = function() {
   var scale = 1,
-      maxDistance = this.skin.maxRadius(this) * 2;
+      maxDistance = this.maxRadius() * 2;
   for (var i = 0; i < this.localities.length; i++) {
     this.localities[i].pos = this.projection(this.localities[i].location);
   }
@@ -925,14 +428,159 @@ Model.prototype.computeLocalityLinkPaths = function() {
   }
 }
 
-Model.prototype.layout = function() {
-  layoutModel(this);
-  refreshModel(this);
+/* locality.js */
+
+function Locality(locality, nodes, model) {
+  this.locality = locality;
+  this.nodes = nodes;
+  this.model = model;
+
+  this.location = this.findCentroid();
+  this.model.addLocality(this);
+}
+
+// localityName extracts the locality name as the first element of the
+// locality array and strips out any leading ".*=" pattern.
+Locality.prototype.name = function() {
+  if (this.locality.length == 0) {
+    return "";
+  }
+  var name = this.locality[this.locality.length - 1],
+      idx = name.indexOf("=");
+  if (idx != -1) {
+    return name.substr(idx + 1, name.length);
+  }
+  return name;
+}
+
+Locality.prototype.findCentroid = function() {
+  var centroid = [0, 0];
+  for (var i = 0; i < this.nodes.length; i++) {
+    centroid = [centroid[0] + nodeLocation(this.nodes[i])[0],
+                centroid[1] + nodeLocation(this.nodes[i])[1]];
+  }
+  return [centroid[0] / this.nodes.length, centroid[1] / this.nodes.length];
+}
+
+function computeAngle(i, count) {
+  return 2 * Math.PI * (i + 1) / count - Math.PI / 2;
+}
+
+// adjustLocation adjusts the locality location so that it lies on a
+// circle of size radius at an angle defined by computeAngle(i, count).
+Locality.prototype.adjustLocation = function(i, count, radius) {
+  var angle = computeAngle(i, count),
+      xy = this.model.projection(this.location),
+      xyAdjusted = [xy[0] + radius * Math.cos(angle), xy[1] + radius * Math.sin(angle)];
+  this.location = this.model.projection.invert(xyAdjusted);
+  for (var i = 0; i < this.nodes.length; i++) {
+    nodeAdjustLocation(this.nodes[i], this.location);
+  }
+}
+
+Locality.prototype.state = function() {
+  var liveCount = this.liveCount();
+  if (liveCount == 0) {
+    return "unavailable";
+  } else if (liveCount < this.nodes.length) {
+    return "mixed";
+  }
+  return "available";
+}
+
+Locality.prototype.liveCount = function() {
+  var count = 0;
+  for (var i = 0; i < this.nodes.length; i++) {
+    count += (nodeState(this.nodes[i]) == LivenessStatus.HEALTHY) ? 1 : 0;
+  }
+  return count;
+}
+
+Locality.prototype.usage = function() {
+  var usage = 0;
+  for (var i = 0; i < this.nodes.length; i++) {
+    usage += nodeUsage(this.nodes[i]);
+  }
+  return usage;
+}
+
+Locality.prototype.capacity = function() {
+  var capacity = 0;
+  for (var i = 0; i < this.nodes.length; i++) {
+    capacity += nodeCapacity(this.nodes[i]);
+  }
+  return capacity;
+}
+
+Locality.prototype.clientActivity = function() {
+  var activity = 0;
+  for (var i = 0; i < this.nodes.length; i++) {
+    activity += nodeClientActivity(this.nodes[i]);
+  }
+  if (activity > this.model.maxClientActivity) {
+    this.model.maxClientActivity = activity;
+  }
+  return activity;
+}
+
+Locality.prototype.totalNetworkActivity = function() {
+  var total = [0, 0];
+  for (var i = 0; i < this.nodes.length; i++) {
+    var activity = nodeNetworkActivity(this.nodes[i], null);
+    total = [total[0] + activity[0], total[1] + activity[1]];
+  }
+  var activity = total[0] + total[1]
+  if (activity > this.model.maxNetworkActivity) {
+    this.model.maxNetworkActivity = activity;
+  }
+  return activity;
+}
+
+/* locality_link.js */
+
+function LocalityLink(l1, l2, model) {
+  this.id = l1.name() + "-" + l2.name();
+  this.l1 = l1;
+  this.l2 = l2;
+  this.model = model;
+}
+
+// networkActivity returns a tuple of values: [outgoing throughput,
+// incoming throughput, average latency].
+LocalityLink.prototype.networkActivity = function() {
+  var filter = {};
+  for (var i = 0; i < this.l2.nodes.length; i++) {
+    filter[nodeID(this.l2.nodes[i])] = null;
+  }
+  var total = [0, 0, 0],
+      count = 0;
+  for (var i = 0; i < this.l1.nodes.length; i++) {
+    var activity = nodeNetworkActivity(this.l1.nodes[i], filter);
+    total = [total[0] + activity[0], total[1] + activity[1], total[2] + activity[2]];
+    count++;
+  }
+  total[2] /= count;
+  return total;
 }
 
 /* visualization.js */
 
 function layoutProjection(model) {
+  model.projectionG = model.svg.append("g");
+
+  model.worldG = model.projectionG.append("g");
+  model.worldG.selectAll("path")
+    .data(worldGeoPaths.features)
+    .enter().append("path")
+    .attr("class", "geopath")
+    .attr("id", function(d) { return "world-" + d.id; });
+
+  model.usStatesG = model.projectionG.append("g");
+  model.usStatesG.selectAll("path")
+    .data(usStatesGeoPaths.features)
+    .enter().append("path")
+    .attr("class", "geopath");
+
   var pathGen = d3.geo.path().projection(model.projection);
 
   // Compute the scale intent (min to max zoom).
@@ -947,6 +595,7 @@ function layoutProjection(model) {
       // Instead of translating the projection, rotate it (compute yaw as longitudinal rotation).
       var t = model.zoom.translate(),
           s = model.zoom.scale();
+
       // Compute limits for horizontal and vertical translation based on max latitude.
       model.projection.scale(s).translate([0, 0]);
       var p = model.projection([180, maxLatitude]);
@@ -987,44 +636,15 @@ function layoutProjection(model) {
       // Fade out geographic projection when approaching max scale.
       model.projectionG.style("opacity", 1 - 0.5 * Math.min(1, (s / maxScale)));
 
-      model.redraw();
+      if (model.redraw != null) {
+        model.redraw();
+      }
     });
 
   // Enable this to pan and zoom manually.
   model.svg.call(model.zoom);
 
-  model.projectionG = model.svg.append("g");
-
-  model.worldG = model.projectionG.append("g");
-  d3.json("https://spencerkimball.github.io/simulation/world.json", function(error, collection) {
-    if (error) throw error;
-    model.worldG.selectAll("path")
-      .data(collection.features)
-      .enter().append("path")
-      .attr("class", "geopath")
-      .attr("id", function(d) { return "world-" + d.id; });
-    model.projectionG.call(model.zoom.event);
-  });
-
-  model.usStatesG = model.projectionG.append("g");
-  d3.json("https://spencerkimball.github.io/simulation/us-states.json", function(error, collection) {
-    if (error) throw error;
-    model.usStatesG.selectAll("path")
-      .data(collection.features)
-      .enter().append("path")
-      .attr("class", "geopath");
-    model.projectionG.call(model.zoom.event);
-  });
-
-  // Current locality label.
-  model.svg.append("text")
-    .attr("class", "current-locality")
-    .attr("dx", function(d) { return "22"; })
-    .attr("dy", function(d) { return "1em"; })
-    .text(fullLocalityName(model.currentLocality, model));
-
   model.projection.scale(model.maxScale);
-  zoomToLocality(model, 0, [], false);
 }
 
 var usStatesBounds = [[-124.626080, 48.987386], [-62.361014, 18.005611]],
@@ -1044,23 +664,7 @@ function findScale(b1, b2, factor) {
   return factor / (b2 - b1) / 1.2;
 }
 
-function zoomToLocality(model, duration, locality, updateHistory) {
-  model.setLocality(locality);
-
-  // Add label.
-  var localityLabel = model.svg.select(".current-locality");
-  localityLabel
-    .transition()
-    .duration(duration / 2)
-    .style("opacity", 0)
-    .each("end", function() {
-      localityLabel.text(fullLocalityName(model.currentLocality, model))
-        .style("opacity", 0)
-        .transition()
-        .duration(duration / 2)
-        .style("opacity", 1);
-    });
-
+function zoomToLocality(model, duration, updateHistory) {
   var bounds = model.bounds(),
       scalex = findScale(bounds[0][0], bounds[1][0], model.width() / (Math.PI / 180)),
       scaley = findScale(bounds[0][1], bounds[1][1], model.height() / (Math.PI / 90)),
@@ -1069,7 +673,7 @@ function zoomToLocality(model, duration, locality, updateHistory) {
 
   if (scale == 0) {
     needAdjust = true;
-    scale = model.maxScale * Math.pow(4, locality.length);
+    scale = model.maxScale * Math.pow(4, model.currentLocality.length);
   }
 
   // Compute the initial translation to center the deployed datacenters.
@@ -1100,38 +704,203 @@ function zoomToLocality(model, duration, locality, updateHistory) {
   }
 }
 
+// createArcPath returns an svg arc object. startAngle and endAngle are
+// expressed in radians.
+function createArcPath(innerR, outerR, startAngle, endAngle) {
+  return d3.svg.arc()
+    .innerRadius(innerR)
+    .outerRadius(outerR)
+    .startAngle(startAngle)
+    .endAngle(endAngle)()
+}
+
+function drawBox(w, h, cornerPct) {
+  var c = w * cornerPct;
+  return "M" + c + ",0 L" + (w-c) + ",0 A" + c + "," + c + " 0 0 1 " + w + "," + c +
+    " L" + w + "," + (h-c) + " A" + c + "," + c + " 0 0 1 " + (w-c) + "," + h +
+    " L" + c + "," + h + " A" + c + "," + c + " 0 0 1 0," + (h-c) +
+    " L0," + c + " A" + c + "," + c + " 0 0 1 " + c + ",0 Z";
+}
+
+function arcAngleFromPct(pct) {
+  return Math.PI * (pct * 1.25 - 0.75);
+}
+
+function angleFromPct(pct) {
+  return Math.PI * (-1.25 + 1.25 * pct);
+}
+
+function bytesToSize(bytes) {
+  var sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  if (bytes == 0) return '0 B';
+  var i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)));
+  return Math.round(bytes * 10 / Math.pow(1024, i), 2) / 10 + ' ' + sizes[i];
+}
+
+function bytesToActivity(bytes) {
+  var sizes = ['B/s', 'KiB/s', 'MiB/s', 'GiB/s', 'TiB/s'];
+  if (bytes < 1) return '0 B/s';
+  var i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)));
+  return Math.round(bytes * 10 / Math.pow(1024, i), 2) / 10 + ' ' + sizes[i];
+}
+
+function latencyMilliseconds(latency) {
+  return Math.round(latency / 1000000) + ' ms';
+}
+
+function showLocalityLinks(model, locality) {
+  model.svg.selectAll(".locality-link-group")
+    .transition()
+    .duration(250)
+    .attr("visibility", function(d) { return (d.l1.name() == locality.name() || d.l2.name() == locality.name()) ? "visible" : "hidden"; })
+    .attr("opacity", function(d) { return (d.l1.name() == locality.name() || d.l2.name() == locality.name()) ? 1 : 0; });
+}
+
+function hideLocalityLinks(model, locality) {
+  model.svg.selectAll(".locality-link-group")
+    .transition()
+    .duration(250)
+    .attr("visibility", "hidden")
+    .attr("opacity", 0);
+}
+
 function layoutModel(model) {
-  model.localitySel = model.svg.selectAll(".locality")
-      .data(model.localities, function(d) { return d.id; });
-  model.skin
-    .locality(model, model.localitySel.enter().append("g")
-              .attr("id", function(d) { return d.id; })
-              .attr("class", "locality")
-              .on("click", function(d) {
-                hideLocalityLinks(model, d);
-                zoomToLocality(model, 750, d.locality, true);
-              }));
-  model.localitySel.exit()
+  var innerR = model.localityRadius,
+      arcWidth = model.localityRadius * 0.11111,
+      outerR = innerR + arcWidth,
+      locSel = model.svg.selectAll(".locality")
+      .data(model.localities, function(d) { return d.name(); });
+  locSel.exit()
     .transition()
     .duration(250)
     .style("fill-opacity", 0)
     .style("stroke-opacity", 0)
     .remove();
-  model.localitySel.style("fill-opacity", 0)
-    .style("stroke-opacity", 0)
-    .transition()
-    .duration(750)
-    .style("fill-opacity", 1)
-    .style("stroke-opacity", 1);
+  var newLocSel = locSel.enter().append("g")
+    .attr("id", function(d) { return d.name(); })
+    .attr("class", "locality")
+    .attr("transform", "translate(" + -100 + ", " + -100 + ")")
+    .on("click", function(d) {
+      if (d.nodes > 1) {
+        hideLocalityLinks(model, d);
+        model.setLocality(d.locality);
+        zoomToLocality(model, 750, true);
+      }
+    });
 
-  model.localityLinkSel = model.svg.selectAll(".locality-link-group")
+  // Capacity arc.
+  var capacityG = newLocSel.append("g")
+      .attr("class", "capacity-centric");
+
+  capacityG.append("path")
+    .attr("d", function(d) { return createArcPath(innerR, outerR, arcAngleFromPct(0), arcAngleFromPct(1)); })
+    .attr("class", "capacity-background");
+  capacityG.append("text")
+    .attr("class", "capacity-label");
+
+  // Used capacity arc.
+  var usedG = capacityG.append("g");
+  usedG.append("path")
+    .attr("class", "capacity-used");
+  usedG.append("text")
+    .attr("class", "capacity-used-label");
+
+  // Capacity labels.
+  var capacityLabels = capacityG.append("g")
+      .attr("transform", "translate(" + -outerR + ", " + -outerR + ")");
+  var capacityLabelsSVG = capacityLabels.append("svg")
+      .attr("width", outerR * 2)
+      .attr("height", outerR * 2);
+  capacityLabelsSVG.append("text")
+    .attr("class", "capacity-used-pct-label")
+    .attr("x", "50%")
+    .attr("y", "40%");
+  capacityLabelsSVG.append("text")
+    .attr("class", "capacity-used-text")
+    .attr("x", "50%")
+    .attr("y", "60%")
+    .text("CAPACITY USED");
+
+  // Client / network activity.
+  var activityG = capacityG.append("g")
+      .attr("transform", "translate(" + 0 + ", " + (innerR * Math.sin(angleFromPct(0))) + ")");
+  activityG.append("line")
+    .attr("class", "client-activity");
+  activityG.append("text")
+    .attr("class", "client-activity-label");
+  activityG.append("line")
+    .attr("class", "network-activity");
+  activityG.append("text")
+    .attr("class", "network-activity-label");
+
+  // Locality label.
+  var localityLabels = capacityG.append("g")
+      .attr("transform", "translate(" + -outerR + ", " + outerR * 0.9 + ")");
+  localityLabels.append("path")
+    .attr("d", function(d) { return drawBox(outerR * 2, 20, 0.05); })
+    .attr("class", "locality-label-background")
+  localityLabels.append("svg")
+    .attr("width", function(d) { return outerR * 2 })
+    .attr("height", "20")
+    .append("text")
+    .attr("class", "locality-label")
+    .attr("x", "50%")
+    .attr("y", "55%")
+    .text(function(d) { return d.name(); });
+
+  // Circle for showing inter-locality network links.
+  capacityG.append("circle")
+    .style("opacity", 0)
+    .attr("r", innerR - arcWidth * 2)
+    .style("cursor", "pointer")
+    .on("mouseover", function(d) { showLocalityLinks(model, d); })
+    .on("mouseout", function(d) { hideLocalityLinks(model, d); });
+
+
+  // Locality Links
+  var linkSel = model.svg.selectAll(".locality-link-group")
     .data(model.localityLinks, function(d) { return d.id; });
-  model.skin
-    .localityLink(model, model.localityLinkSel.enter().append("g")
-                  .attr("class", "locality-link-group")
-                  .attr("opacity", 0)
-                  .attr("id", function(d) { return d.id; }));
-  model.localityLinkSel.exit().remove();
+  linkSel.exit().remove();
+  var newLinkSel = linkSel.enter().append("g")
+      .attr("class", "locality-link-group")
+      .attr("opacity", 0)
+      .attr("id", function(d) { return d.id; });
+
+  newLinkSel.append("path")
+    .attr("id", function(d) { return d.id + "-path"; })
+    .attr("class", "locality-link");
+
+  newLinkSel.append("text")
+    .attr("id", function(d) { return "incoming-" + d.id; })
+    .append("textPath")
+    .attr("class", "incoming-throughput-label")
+    .attr("startOffset", "50%")
+    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; });
+  newLinkSel.append("text")
+    .attr("id", function(d) { return "outgoing-" + d.id; })
+    .append("textPath")
+    .attr("class", "outgoing-throughput-label")
+    .attr("startOffset", "50%")
+    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; })
+  newLinkSel.append("text")
+    .attr("id", function(d) { return "rtt-" + d.id; })
+    .append("textPath")
+    .attr("class", "rtt-label")
+    .attr("startOffset", "60%")
+    .attr("xlink:href", function(d) { return "#" + d.id + "-path"; })
+
+  newLinkSel.selectAll(".locality-link-group")
+    .append("use")
+    .attr("id", function(d) { return "incoming-" + d.id + "-path"; })
+    .attr("xlink:href", function(d) { return "#incoming-" + d.id; });
+  newLinkSel.selectAll(".locality-link-group")
+    .append("use")
+    .attr("id", function(d) { return "outgoing-" + d.id + "-path"; })
+    .attr("xlink:href", function(d) { return "#outgoing-" + d.id; });
+  newLinkSel.selectAll(".locality-link-group")
+    .append("use")
+    .attr("id", function(d) { return "rtt-" + d.id + "-path"; })
+    .attr("xlink:href", function(d) { return "#rtt-" + d.id; });
 
   model.redraw = function() {
     // Now that we've set the projection and adjusted locality locations
@@ -1143,24 +912,83 @@ function layoutModel(model) {
     // Compute locality link paths.
     model.computeLocalityLinkPaths();
 
-    model.localitySel
-      .attr("transform", function(d) {
-        if (d == null) {
-          return;
-        }
-        d.x = d.pos[0];
-        d.y = d.pos[1];
-        return "translate(" + d.pos + ")scale(" + model.localityScale + ")";
-      });
-    model.localityLinkSel.selectAll(".locality-link")
+    var locSel = model.svg.selectAll(".locality"),
+        linkSel = model.svg.selectAll(".locality-link-group");
+
+    locSel.attr("transform", function(d) {
+      return "translate(" + d.pos + ")scale(" + model.localityScale + ")";
+    });
+    linkSel.selectAll(".locality-link")
       .attr("d", function(d) { return d3.line().curve(d3.curveCardinalOpen.tension(0.5))(d.points); });
+
+    updateModel(model, locSel, linkSel);
   }
 
-  refreshModel(model);
   model.redraw();
 }
 
-function refreshModel(model) {
-  model.skin.update(model);
-  model.projectionG.call(model.zoom.event);
+function updateModel(model, locSel, linkSel) {
+  var innerR = model.localityRadius,
+      arcWidth = model.localityRadius * 0.11111,
+      outerR = innerR + arcWidth;
+
+  locSel.selectAll(".capacity-label")
+    .attr("x", (outerR + arcWidth) * Math.cos(0))
+    .text(function(d) { return bytesToSize(d.capacity()); });
+
+  locSel.selectAll(".capacity-used")
+    .attr("d", function(d) {
+      var pct = d.usage() / d.capacity();
+      return createArcPath(innerR, outerR, arcAngleFromPct(0), arcAngleFromPct(pct));
+    });
+
+  locSel.selectAll(".capacity-used-label")
+    .attr("transform", function(d) {
+      var pct = d.usage() / d.capacity(),
+          x = Math.cos(angleFromPct(pct)),
+          y = Math.sin(angleFromPct(pct)),
+          radius = outerR + arcWidth;
+      return "translate(" + (x * radius) + "," + (y * radius) + ")";
+    })
+    .attr("text-anchor", function(d) {
+      var pct = d.usage() / d.capacity();
+      return (pct < 0.75) ? "end" : "start";
+    })
+    .text(function(d) { return bytesToSize(d.usage()); });
+  locSel.selectAll(".capacity-used-pct-label")
+    .text(function(d) { return Math.round(100 * d.usage() / d.capacity()) + "%"; });
+
+  var barsX = innerR * Math.cos(angleFromPct(0)),
+      barsWidth = outerR - barsX - 4,
+      labelX = outerR + arcWidth,
+      labelH = 8;
+  locSel.selectAll(".client-activity")
+    .transition()
+    .duration(250)
+    .attr("x1", outerR - 2)
+    .attr("y1", -labelH)
+    .attr("x2", function(d) { return Math.round(outerR - barsWidth * (d.clientActivity() / model.maxClientActivity)); })
+    .attr("y2", -labelH);
+  locSel.selectAll(".client-activity-label")
+    .attr("x", labelX)
+    .attr("y", -labelH)
+    .text(function(d) { return d.clientActivity(); });
+  locSel.selectAll(".network-activity")
+    .transition()
+    .duration(250)
+    .attr("x1", outerR - 2)
+    .attr("y1", 0)
+    .attr("x2", function(d) { return Math.round(outerR - barsWidth * (d.totalNetworkActivity() / model.maxNetworkActivity)); })
+    .attr("y2", 0);
+  locSel.selectAll(".network-activity-label")
+    .attr("x", labelX)
+    .attr("y", 0)
+    .text(function(d) { return bytesToActivity(d.totalNetworkActivity()); });
+
+  linkSel.selectAll(".incoming-throughput-label")
+    .text(function(d) { return "←" + bytesToActivity(d.networkActivity(null)[1]); });
+  linkSel.selectAll(".outgoing-throughput-label")
+    .text(function(d) { return bytesToActivity(d.networkActivity(null)[0]) + "→"; });
+  linkSel.selectAll(".rtt-label")
+    .text(function(d) { return latencyMilliseconds(d.networkActivity(null)[2]); });
 }
