@@ -137,22 +137,27 @@ function nodeNetworkActivity(node, model, filter) {
 
   if (last != null) {
     var seconds = node.updated_at.subtract(last.updated_at).divide(1000000).toNumber() / 1000;
-    for (var key in node.incoming) {
+    for (var key in node.outgoing) {
+      if (key == nodeID(node)) continue;
       if (filter == null || (key in filter)) {
         if (key in last.outgoing) {
-          activity[0] += (node.outgoing[key] - last.outgoing[key]) / seconds;
+          activity[0] += node.outgoing[key] - last.outgoing[key];
         }
       }
     }
+    activity[0] /= seconds;
     for (var key in node.incoming) {
+      if (key == nodeID(node)) continue;
       if (filter == null || (key in filter)) {
         if (key in last.incoming) {
-          activity[1] += (node.incoming[key] - last.outgoing[key]) / seconds;
+          activity[1] += node.incoming[key] - last.incoming[key];
         }
       }
     }
+    activity[1] /= seconds;
   }
   for (var key in node.latencies) {
+    if (key == nodeID(node)) continue;
     if (filter == null || (key in filter)) {
       activity[2] += node.latencies[key];
       count++;
@@ -251,17 +256,6 @@ Model.prototype.setLocality = function(locality) {
   this.resetLocalities();
 }
 
-Model.prototype.addLocality = function(locality) {
-  for (var i = 0; i < this.localities.length; i++) {
-    // Add localityLinks from all pre-existing localities to this newly added locality.
-    var oLocality = this.localities[i];
-    this.localityLinks.push(new LocalityLink(oLocality, locality, this));
-  }
-
-  // Add to array of datacenters.
-  this.localities.push(locality);
-}
-
 // localityKey concatenates locality information into a comma-separated
 // string for use as the key in a dictionary.
 function localityKey(locality) {
@@ -314,9 +308,17 @@ Model.prototype.resetLocalities = function() {
   }
   for (var loc in localityMap) {
     var l = new Locality(localityMap[loc].locality, localityMap[loc].nodes, this);
+    this.localities.push(l);
+
     // Initialize the max client and network activity values for the displayed localities.
     l.clientActivity();
     l.totalNetworkActivity();
+  }
+  for (var l1 of this.localities) {
+    for (var l2 of this.localities) {
+      if (l1 == l2) continue;
+      this.localityLinks.push(new LocalityLink(l1, l2, this));
+    }
   }
   layoutModel(this);
 }
@@ -416,11 +418,9 @@ Model.prototype.computeLocalityLinkPaths = function() {
   var maxR = this.localityRadius * 1.11111 * this.localityScale;
   for (var i = 0; i < this.localityLinks.length; i++) {
     var link = this.localityLinks[i];
-    // Make sure the link goes from left to right.
+    // If the link goes from right to left, mark it as reversed.
     if (link.l1.pos[0] > link.l2.pos[0]) {
-      var l1Tmp = link.l1;
-      link.l1 = link.l2;
-      link.l2 = l1Tmp;
+      link.reversed = true
     }
     var vec = sub(link.l2.pos, link.l1.pos),
         len = length(vec),
@@ -471,12 +471,12 @@ Model.prototype.computeLocalityLinkPaths = function() {
       }
     }
 
-    // Ensure that points sort from left to right.
-    link.points.sort(function(a, b) { return a[0] - b[0]; });
-
     // Finish up the curve by adding the final points.
     link.points.push(sub(link.l2.pos, mult(norm, skip)));
     link.points.push(link.l2.pos);
+
+    // Ensure that points sort from left to right.
+    link.points.sort(function(a, b) { return a[0] - b[0]; });
   }
 }
 
@@ -486,9 +486,7 @@ function Locality(locality, nodes, model) {
   this.locality = locality;
   this.nodes = nodes;
   this.model = model;
-
   this.location = this.findCentroid();
-  this.model.addLocality(this);
 }
 
 // localityName extracts the locality name as the first element of the
@@ -577,8 +575,8 @@ Locality.prototype.clientActivity = function() {
 
 Locality.prototype.totalNetworkActivity = function() {
   var total = [0, 0];
-  for (var i = 0; i < this.nodes.length; i++) {
-    var activity = nodeNetworkActivity(this.nodes[i], this.model, null);
+  for (var n of this.nodes) {
+    var activity = nodeNetworkActivity(n, this.model, null);
     total = [total[0] + activity[0], total[1] + activity[1]];
   }
   var activity = total[0] + total[1]
@@ -594,6 +592,7 @@ function LocalityLink(l1, l2, model) {
   this.id = l1.name() + "-" + l2.name();
   this.l1 = l1;
   this.l2 = l2;
+  this.reversed = false;
   this.model = model;
 }
 
@@ -601,13 +600,13 @@ function LocalityLink(l1, l2, model) {
 // incoming throughput, average latency].
 LocalityLink.prototype.networkActivity = function() {
   var filter = {};
-  for (var i = 0; i < this.l2.nodes.length; i++) {
-    filter[nodeID(this.l2.nodes[i])] = null;
+  for (var n2 of this.l2.nodes) {
+    filter[nodeID(n2)] = null;
   }
   var total = [0, 0, 0],
       count = 0;
-  for (var i = 0; i < this.l1.nodes.length; i++) {
-    var activity = nodeNetworkActivity(this.l1.nodes[i], this.model, filter);
+  for (var n1 of this.l1.nodes) {
+    var activity = nodeNetworkActivity(n1, this.model, filter);
     total = [total[0] + activity[0], total[1] + activity[1], total[2] + activity[2]];
     count++;
   }
@@ -798,8 +797,8 @@ function showLocalityLinks(model, locality) {
   model.svg.selectAll(".locality-link-group")
     .transition()
     .duration(250)
-    .attr("visibility", function(d) { return (d.l1.name() == locality.name() || d.l2.name() == locality.name()) ? "visible" : "hidden"; })
-    .attr("opacity", function(d) { return (d.l1.name() == locality.name() || d.l2.name() == locality.name()) ? 1 : 0; });
+    .attr("visibility", function(d) { return d.l1.name() == locality.name() ? "visible" : "hidden"; })
+    .attr("opacity", function(d) { return d.l1.name() == locality.name() ? 1 : 0; });
 }
 
 function hideLocalityLinks(model, locality) {
@@ -1001,7 +1000,15 @@ function updateModel(model, locSel, linkSel) {
     })
     .text(function(d) { return bytesToSize(d.usage()); });
   locSel.select(".capacity-used-pct-label")
-    .text(function(d) { return Math.round(100 * d.usage() / d.capacity()) + "%"; });
+    .text(function(d) {
+      var pctUsed = d.usage() / d.capacity();
+      if (pctUsed < 0.01) {
+        return "." + d3.format("02d")(Math.round(10000 * pctUsed)) + "%";
+      } else if (pctUsed < 0.1) {
+        return (Math.round(1000 * pctUsed) / 10) + "%";
+      }
+      return Math.round(100 * pctUsed) + "%";
+    });
 
   var barsX = innerR * Math.cos(angleFromPct(0)),
       barsWidth = outerR - barsX - 4,
@@ -1031,9 +1038,19 @@ function updateModel(model, locSel, linkSel) {
     .text(function(d) { return bytesToActivity(d.totalNetworkActivity()); });
 
   linkSel.select(".incoming-throughput-label")
-    .text(function(d) { return "←" + bytesToActivity(d.networkActivity(null)[1]); });
+    .text(function(d) {
+      if (d.reversed) {
+        return bytesToActivity(d.networkActivity(null)[1]) + "→";
+      }
+      return "←" + bytesToActivity(d.networkActivity(null)[1]);
+    });
   linkSel.select(".outgoing-throughput-label")
-    .text(function(d) { return bytesToActivity(d.networkActivity(null)[0]) + "→"; });
+    .text(function(d) {
+      if (d.reversed) {
+        return "←" + bytesToActivity(d.networkActivity(null)[0]);
+      }
+      return bytesToActivity(d.networkActivity(null)[0]) + "→";
+    });
   linkSel.select(".rtt-label")
     .text(function(d) { return latencyMilliseconds(d.networkActivity(null)[2]); });
 }
