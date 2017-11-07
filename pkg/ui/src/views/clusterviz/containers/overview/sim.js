@@ -15,6 +15,7 @@ d3.curveCardinalOpen = curveCardinalOpen;
 var locations = {
   "city=New York City": [-74.00597, 40.71427],
   "city=Miami": [-80.19366, 25.77427],
+  "city=Dallas": [-96.7970, 32.7767],
   "city=Des Moines": [-93.60911, 41.60054],
   "city=Los Angeles": [-118.24368, 34.05223],
   "city=Seattle": [-122.33207, 47.60621],
@@ -93,7 +94,8 @@ function nodeLocality(node) {
 
 function nodeLocation(node) {
   var locality = nodeLocality(node);
-  for (var loc of locality) {
+  for (var i = locality.length - 1; i >= 0; i--) {
+    var loc = locality[i];
     if (loc in locations) {
       return locations[loc];
     }
@@ -141,7 +143,7 @@ function nodeNetworkActivity(node, model, filter) {
       if (key == nodeID(node)) continue;
       if (filter == null || (key in filter)) {
         if (key in last.outgoing) {
-          activity[0] += node.outgoing[key] - last.outgoing[key];
+          activity[0] += (node.outgoing[key].toNumber() - last.outgoing[key].toNumber());
         }
       }
     }
@@ -150,7 +152,7 @@ function nodeNetworkActivity(node, model, filter) {
       if (key == nodeID(node)) continue;
       if (filter == null || (key in filter)) {
         if (key in last.incoming) {
-          activity[1] += node.incoming[key] - last.incoming[key];
+          activity[1] += (node.incoming[key].toNumber() - last.incoming[key].toNumber());
         }
       }
     }
@@ -159,7 +161,7 @@ function nodeNetworkActivity(node, model, filter) {
   for (var key in node.latencies) {
     if (key == nodeID(node)) continue;
     if (filter == null || (key in filter)) {
-      activity[2] += node.latencies[key];
+      activity[2] += node.latencies[key].divide(1000000).toNumber();
       count++;
     }
   }
@@ -480,6 +482,21 @@ Model.prototype.computeLocalityLinkPaths = function() {
   }
 }
 
+// adjustLocation adjusts the locality location so that it lies on a
+// circle of size radius.
+Model.prototype.adjustLocations = function(radius) {
+  for (var i = 0; i < this.localities.length; i++) {
+    var angle = 2 * Math.PI * i / this.localities.length - Math.PI / 2,
+        xy = this.projection(this.localities[i].location),
+        xyAdjusted = [xy[0] + radius * Math.cos(angle), xy[1] + radius * Math.sin(angle)],
+        loc = this.projection.invert(xyAdjusted);
+    this.localities[i].location = loc;
+    for (var n of this.localities[i].nodes) {
+      nodeAdjustLocation(n, loc);
+    }
+  }
+}
+
 /* locality.js */
 
 function Locality(locality, nodes, model) {
@@ -510,22 +527,6 @@ Locality.prototype.findCentroid = function() {
                 centroid[1] + nodeLocation(this.nodes[i])[1]];
   }
   return [centroid[0] / this.nodes.length, centroid[1] / this.nodes.length];
-}
-
-function computeAngle(i, count) {
-  return 2 * Math.PI * i / count - Math.PI / 2;
-}
-
-// adjustLocation adjusts the locality location so that it lies on a
-// circle of size radius at an angle defined by computeAngle(i, count).
-Locality.prototype.adjustLocation = function(i, count, radius) {
-  var angle = computeAngle(i, count),
-      xy = this.model.projection(this.location),
-      xyAdjusted = [xy[0] + radius * Math.cos(angle), xy[1] + radius * Math.sin(angle)];
-  this.location = this.model.projection.invert(xyAdjusted);
-  for (var i = 0; i < this.nodes.length; i++) {
-    nodeAdjustLocation(this.nodes[i], this.location);
-  }
 }
 
 Locality.prototype.state = function() {
@@ -577,9 +578,10 @@ Locality.prototype.totalNetworkActivity = function() {
   var total = [0, 0];
   for (var n of this.nodes) {
     var activity = nodeNetworkActivity(n, this.model, null);
-    total = [total[0] + activity[0], total[1] + activity[1]];
+    total[0] += activity[0];
+    total[1] += activity[1];
   }
-  var activity = total[0] + total[1]
+  var activity = total[0] + total[1];
   if (activity > this.model.maxNetworkActivity) {
     this.model.maxNetworkActivity = activity;
   }
@@ -607,7 +609,9 @@ LocalityLink.prototype.networkActivity = function() {
       count = 0;
   for (var n1 of this.l1.nodes) {
     var activity = nodeNetworkActivity(n1, this.model, filter);
-    total = [total[0] + activity[0], total[1] + activity[1], total[2] + activity[2]];
+    total[0] += activity[0];
+    total[1] += activity[1];
+    total[2] += activity[2];
     count++;
   }
   total[2] /= count;
@@ -667,33 +671,31 @@ function layoutProjection(model) {
         .translate(t)
         .scale(s);
 
-      model.worldG.selectAll("path").attr("d", pathGen);
+      model.projectionG.selectAll("path").attr("d", pathGen);
 
       // Draw US states if they intersect our viewable area.
       var usB = [model.projection(usStatesBounds[0]), model.projection(usStatesBounds[1])];
       var usScale = (usB[1][1] - usB[0][1]) / model.width();
       if (usB[0][0] < model.width() && usB[1][0] > 0 && usB[0][1] < model.height() && usB[1][1] > 0 && usScale >= 0.2) {
         // Set opacity based on zoom scale.
-        model.usStatesG.selectAll("path").attr("d", pathGen);
         var opacity = (usScale - 0.2) / (0.33333 - 0.2)
         model.usStatesG.style("opacity",  opacity);
         // Set opacity for the considerably less detailed world map's version of the US.
-        model.projectionG.select("#world-840").style("opacity", opacity < 1 ? 1 : 0);
+        model.worldG.select("#world-840").style("opacity", opacity < 1 ? 1 : 0);
       } else {
         model.usStatesG.style("opacity", 0);
-        model.projectionG.select("#world-840").style("opacity", 1);
+        model.worldG.select("#world-840").style("opacity", 1);
       }
-
       // Fade out geographic projection when approaching max scale.
-      model.projectionG.style("opacity", 1 - 0.5 * Math.min(1, (s / maxScale)));
+      model.projectionG.style("opacity", 1 - Math.min(1, (s / maxScale)));
 
       if (model.redraw != null) {
         model.redraw();
       }
+    })
+    .on("zoomend", function() {
+      model.svg.call(model.zoom); // enable manual pan and zoom
     });
-
-  // Enable this to pan and zoom manually.
-  model.svg.call(model.zoom);
 
   model.projection.scale(model.maxScale);
 }
@@ -706,10 +708,13 @@ function findScale(b1, b2, factor) {
   if (b1 == b2) {
     return 0.0;
   }
-  return factor / Math.abs(b2 - b1);
+  return factor / Math.abs(b2 - b1) / 1.5;
 }
 
 function zoomToLocality(model, duration, updateHistory) {
+  // While zooming into a locality, disable manual pan & zoom.
+  model.svg.on('.zoom', null);
+
   var bounds = model.bounds(),
       scalex = findScale(bounds[0][0], bounds[1][0], model.width() / (Math.PI / 180)),
       scaley = findScale(bounds[0][1], bounds[1][1], model.height() / (Math.PI / 90)),
@@ -718,7 +723,7 @@ function zoomToLocality(model, duration, updateHistory) {
 
   if (scale == 0) {
     needAdjust = true;
-    scale = model.maxScale * Math.pow(4, model.currentLocality.length);
+    scale = model.maxScale * Math.pow(2, model.currentLocality.length);
   }
 
   // Compute the initial translation to center the deployed datacenters.
@@ -727,12 +732,10 @@ function zoomToLocality(model, duration, updateHistory) {
   var p = model.projection(center);
 
   // If necessary (all localities had the same location), adjust the
-  // location of each localities so there's some differentiation for
+  // location of each locality so there's some differentiation for
   // display purposes.
   if (needAdjust) {
-    for (var i = 0; i < model.localities.length; i++) {
-      model.localities[i].adjustLocation(i, model.localities.length, 0.35 * Math.min(model.width(), model.height()))
-    }
+    model.adjustLocations(0.3 * Math.min(model.width(), model.height()));
     bounds = model.bounds();
   }
 
@@ -790,7 +793,7 @@ function bytesToActivity(bytes) {
 }
 
 function latencyMilliseconds(latency) {
-  return Math.round(latency / 1000000) + ' ms';
+  return Math.round(latency) + ' ms';
 }
 
 function showLocalityLinks(model, locality) {
@@ -859,20 +862,25 @@ function layoutModel(model) {
       .data(model.localities, function(d) { return d.name(); });
   locSel.exit()
     .transition()
-    .duration(250)
-    .attr("opacity", 0)
+    .duration(500)
+    .style("opacity", 0)
+    .attr("class", "removed-locality")
     .remove();
   var newLocSel = locSel.enter().append("g")
       .attr("id", function(d) { return d.name(); })
       .attr("class", "locality")
-      .attr("transform", "translate(" + -100 + ", " + -100 + ")")
+      .style("opacity", 0)
       .on("click", function(d) {
-        if (d.nodes > 1) {
+        if (d.nodes.length > 1 && d.locality != model.currentLocality) {
           hideLocalityLinks(model, d);
           model.setLocality(d.locality);
           zoomToLocality(model, 750, true);
         }
       });
+  newLocSel
+    .transition()
+    .duration(750)
+    .style("opacity", 1);
 
   var innerR = model.localityRadius,
       arcWidth = model.localityRadius * 0.11111,
@@ -955,6 +963,11 @@ function layoutModel(model) {
 
     // Compute locality link paths.
     model.computeLocalityLinkPaths();
+
+    model.svg.selectAll(".removed-locality")
+      .attr("transform", function(d) {
+        return "translate(" + model.projection(d.location) + ")";
+      });
 
     var locSel = model.svg.selectAll(".locality"),
         linkSel = model.svg.selectAll(".locality-link-group");
