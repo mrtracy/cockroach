@@ -139,29 +139,29 @@ function nodeNetworkActivity(node, model, filter) {
 
   if (last != null) {
     var seconds = node.updated_at.subtract(last.updated_at).divide(1000000).toNumber() / 1000;
-    for (var key in node.outgoing) {
+    for (var key in node.activity) {
       if (key == nodeID(node)) continue;
       if (filter == null || (key in filter)) {
-        if (key in last.outgoing) {
-          activity[0] += (node.outgoing[key].toNumber() - last.outgoing[key].toNumber());
+        if (key in last.activity) {
+          activity[0] += (node.activity[key].outgoing.toNumber() - last.activity[key].outgoing.toNumber());
         }
       }
     }
     activity[0] /= seconds;
-    for (var key in node.incoming) {
+    for (var key in node.activity) {
       if (key == nodeID(node)) continue;
       if (filter == null || (key in filter)) {
-        if (key in last.incoming) {
-          activity[1] += (node.incoming[key].toNumber() - last.incoming[key].toNumber());
+        if (key in last.activity) {
+          activity[1] += (node.activity[key].incoming.toNumber() - last.activity[key].incoming.toNumber());
         }
       }
     }
     activity[1] /= seconds;
   }
-  for (var key in node.latencies) {
+  for (var key in node.activity) {
     if (key == nodeID(node)) continue;
     if (filter == null || (key in filter)) {
-      activity[2] += node.latencies[key].divide(1000000).toNumber();
+      activity[2] += node.activity[key].latency.divide(1000000).toNumber();
       count++;
     }
   }
