@@ -4718,6 +4718,12 @@ func (r *Replica) processRaftCommand(
 			tmpBatch.Close()
 		}
 
+		if log.V(2) {
+			if raftCmd.ReplicatedEvalResult.IsLeaseRequest {
+				log.Infof(ctx, "lease request SysBytes delta: %d", raftCmd.ReplicatedEvalResult.Delta.SysBytes)
+			}
+		}
+
 		var delta enginepb.MVCCStats
 		{
 			var err error

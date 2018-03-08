@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/storage/engine/enginepb"
 	"github.com/cockroachdb/cockroach/pkg/storage/spanset"
 	"github.com/cockroachdb/cockroach/pkg/storage/storagebase"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 )
 
 func declareKeysRequestLease(
@@ -71,6 +72,9 @@ func evalNewLease(
 ) (result.Result, error) {
 	// When returning an error from this method, must always return
 	// a newFailedLeaseTrigger() to satisfy stats.
+	if log.V(2) {
+		log.Infof(ctx, "lease evaluation: prev lease: %+v, new lease: %+v", prevLease, lease)
+	}
 
 	// Ensure either an Epoch is set or Start < Expiration.
 	if (lease.Type() == roachpb.LeaseExpiration && !lease.Start.Less(lease.GetExpiration())) ||
@@ -146,6 +150,10 @@ func evalNewLease(
 	// Store the lease to disk & in-memory.
 	if err := MakeStateLoader(rec).SetLease(ctx, batch, ms, lease); err != nil {
 		return newFailedLeaseTrigger(isTransfer), err
+	}
+
+	if log.V(2) {
+		log.Infof(ctx, "lease stored: prev lease: %+v, new lease: %+v", prevLease, lease)
 	}
 
 	var pd result.Result
